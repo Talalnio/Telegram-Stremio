@@ -21,7 +21,10 @@ class Telegram:
     UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "")
 
     OWNER_ID = int(getenv("OWNER_ID", "5422223708"))
+    
     REPLACE_MODE = getenv("REPLACE_MODE", "true").lower() == "true"
+    HIDE_CATALOG = getenv("HIDE_CATALOG", "false").lower() == "true"
+    # SKIP_MULTIPART = getenv("SKIP_MULTIPART", "true").lower() == "true"
 
     ADMIN_USERNAME = getenv("ADMIN_USERNAME", "fyvio")
     ADMIN_PASSWORD = getenv("ADMIN_PASSWORD", "fyvio")

@@ -218,6 +218,7 @@ All environment variables for this project are defined in the `config.env` file.
 | **`HELPER_BOT_TOKEN`** | **Secondary bot token** used to assist the main bot with tasks like deleting, editing, or managing. |
 | **`OWNER_ID`** | Your **Telegram user ID**. This ID has full administrative access. |
 | **`REPLACE_MODE`** | When `true`, new files replace existing files of the same quality. When `false`, multiple files of the same quality are allowed. |
+| **`HIDE_CATALOG`** | When `true`, the default Telegram Stremio Catalog is hidden, and streams only show in the Cinemata catalog (i.e., Cinemata addon is mandatory). Default is `false`. |
 
 ### 🗄️ Storage
 

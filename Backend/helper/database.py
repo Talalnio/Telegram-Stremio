@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from Backend.logger import LOGGER
 from Backend.config import Telegram
 import re
-from Backend.helper.encrypt import decode_string, encode_string
+from Backend.helper.encrypt import decode_string
 from Backend.helper.modal import Episode, MovieSchema, QualityDetail, Season, TVShowSchema
 from Backend.helper.task_manager import delete_message
 
@@ -142,8 +142,6 @@ class Database:
 
         return results, dbs_checked, total_count
 
-
-
     async def _move_document(
         self, collection_name: str, document: dict, old_db_index: int
     ) -> bool:
@@ -168,7 +166,6 @@ class Database:
         await self.update_current_db_index()
         LOGGER.info(f"Switched to storage_{self.current_db_index}")
         return await func(*args)
-
 
     # -------------------------------
     # Multi Database Method for insert/update/delete/list
@@ -297,7 +294,6 @@ class Database:
         existing_qualities = existing_movie.get("telegram", [])
 
         if Telegram.REPLACE_MODE:
-            # delete all same-quality entries
             to_delete = [q for q in existing_qualities if q.get("quality") == target_quality]
 
             for q in to_delete:
@@ -498,8 +494,6 @@ class Database:
             "tv_shows": [convert_objectid_to_str(result) for result in results],
         }
 
-
-
     async def search_documents(
             self, 
             query: str, 
@@ -590,62 +584,67 @@ class Database:
 
 
     async def get_media_details(
-        self, tmdb_id: int, db_index: int,
-        season_number: Optional[int] = None, episode_number: Optional[int] = None
+        self, 
+        imdb_id: str,
+        season_number: Optional[int] = None, 
+        episode_number: Optional[int] = None
     ) -> Optional[dict]:
-        db_key = f"storage_{db_index}"
-        if episode_number is not None and season_number is not None:
-            tv_show = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-            if not tv_show:
-                return None
-            for season in tv_show.get("seasons", []):
-                if season.get("season_number") == season_number:
-                    for episode in season.get("episodes", []):
-                        if episode.get("episode_number") == episode_number:
-                            details = convert_objectid_to_str(episode)
+
+        for db_idx in range(self.current_db_index, 0, -1):
+            db_key = f"storage_{db_idx}"
+            
+            if episode_number is not None and season_number is not None:
+                tv_show = await self.dbs[db_key]["tv"].find_one({"imdb_id": imdb_id})
+                if tv_show:
+                    for season in tv_show.get("seasons", []):
+                        if season.get("season_number") == season_number:
+                            for episode in season.get("episodes", []):
+                                if episode.get("episode_number") == episode_number:
+                                    details = convert_objectid_to_str(episode)
+                                    details.update({
+                                        "imdb_id": imdb_id,
+                                        "type": "tv",
+                                        "season_number": season_number,
+                                        "episode_number": episode_number,
+                                        "backdrop": episode.get("episode_backdrop"),
+                                        "db_index": db_idx
+                                    })
+                                    return details
+            
+            elif season_number is not None:
+                tv_show = await self.dbs[db_key]["tv"].find_one({"imdb_id": imdb_id})
+                if tv_show:
+                    for season in tv_show.get("seasons", []):
+                        if season.get("season_number") == season_number:
+                            details = convert_objectid_to_str(season)
                             details.update({
-                                "tmdb_id": tmdb_id,
+                                "imdb_id": imdb_id,
                                 "type": "tv",
                                 "season_number": season_number,
-                                "episode_number": episode_number,
-                                "backdrop": episode.get("episode_backdrop")
+                                "db_index": db_idx
                             })
                             return details
-            return None
-
-        elif season_number is not None:
-            tv_show = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-            if not tv_show:
-                return None
-            for season in tv_show.get("seasons", []):
-                if season.get("season_number") == season_number:
-                    details = convert_objectid_to_str(season)
-                    details.update({
-                        "tmdb_id": tmdb_id,
-                        "type": "tv",
-                        "season_number": season_number
-                    })
-                    return details
-            return None
-
-        else:
-            tv_doc = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-            if tv_doc:
-                tv_doc = convert_objectid_to_str(tv_doc)
-                tv_doc["type"] = "tv"
-                return tv_doc
-            movie_doc = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
-            if movie_doc:
-                movie_doc = convert_objectid_to_str(movie_doc)
-                movie_doc["type"] = "movie"
-                return movie_doc
-            return None
-
+            
+            else:
+                tv_doc = await self.dbs[db_key]["tv"].find_one({"imdb_id": imdb_id})
+                if tv_doc:
+                    tv_doc = convert_objectid_to_str(tv_doc)
+                    tv_doc["type"] = "tv"
+                    tv_doc["db_index"] = db_idx
+                    return tv_doc
+                
+                movie_doc = await self.dbs[db_key]["movie"].find_one({"imdb_id": imdb_id})
+                if movie_doc:
+                    movie_doc = convert_objectid_to_str(movie_doc)
+                    movie_doc["type"] = "movie"
+                    movie_doc["db_index"] = db_idx
+                    return movie_doc
+        
+        return None
 
     # -------------------------------
     # DB Method for Edit Post
     # -------------------------------
-
 
     async def get_document(self, media_type: str, tmdb_id: int, db_index: int) -> Optional[Dict[str, Any]]:
         db_key = f"storage_{db_index}"
