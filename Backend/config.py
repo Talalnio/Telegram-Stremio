@@ -19,7 +19,6 @@ class Telegram:
     DATABASE = [db.strip() for db in (getenv("DATABASE") or "").split(",") if db.strip()]
 
     TMDB_API = getenv("TMDB_API", "")
-    TMDB_LANGUAGE = getenv("TMDB_LANGUAGE", "ar-SA")
 
     UPSTREAM_REPO = getenv("UPSTREAM_REPO", "")
     UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "")
