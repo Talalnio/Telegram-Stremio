@@ -114,50 +114,57 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         catalogs = []
     else:
         resources = ["catalog", "meta", "stream"]
-        catalogs = [
-            {
+        catalogs = []
+        
+        if Telegram.CATALOG_LATEST_MOVIES_ENABLED:
+            catalogs.append({
                 "type": "movie",
                 "id": "latest_movies",
-                "name": "Latest",
+                "name": Telegram.CATALOG_LATEST_MOVIES_NAME,
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
-            },
-            {
+            })
+            
+        if Telegram.CATALOG_POPULAR_MOVIES_ENABLED:
+            catalogs.append({
                 "type": "movie",
                 "id": "top_movies",
-                "name": "Popular",
+                "name": Telegram.CATALOG_POPULAR_MOVIES_NAME,
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
                 "extraSupported": ["genre", "skip", "search"]
-            },
-            {
+            })
+            
+        if Telegram.CATALOG_LATEST_SERIES_ENABLED:
+            catalogs.append({
                 "type": "series",
                 "id": "latest_series",
-                "name": "Latest",
+                "name": Telegram.CATALOG_LATEST_SERIES_NAME,
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
-            },
-            {
+            })
+            
+        if Telegram.CATALOG_POPULAR_SERIES_ENABLED:
+            catalogs.append({
                 "type": "series",
                 "id": "top_series",
-                "name": "Popular",
+                "name": Telegram.CATALOG_POPULAR_SERIES_NAME,
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
                 "extraSupported": ["genre", "skip", "search"]
-            }
-        ]
+            })
 
     return {
         "id": "telegram.media",

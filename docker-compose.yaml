@@ -6,6 +6,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config.env:/app/config.env
+      - ./Backend:/app/Backend
     restart: unless-stopped
     logging:
       driver: "json-file"

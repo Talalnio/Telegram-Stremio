@@ -12,7 +12,7 @@ from Backend.helper.encrypt import encode_string
 
 # ----------------- Configuration -----------------
 DELAY = 0
-tmdb = aioTMDb(key=Telegram.TMDB_API, language="en-US", region="US")
+tmdb = aioTMDb(key=Telegram.TMDB_API, language=Telegram.TMDB_LANGUAGE, region="US")
 
 # Cache dictionaries (per run)
 IMDB_CACHE: dict = {}
@@ -35,11 +35,23 @@ def get_tmdb_logo(images) -> str:
     logos = getattr(images, "logos", None)
     if not logos:
         return ""
+
+    # 1. Configured Language
+    target_lang = Telegram.TMDB_LANGUAGE.split("-")[0]
+    for logo in logos:
+        iso_lang = getattr(logo, "iso_639_1", None)
+        file_path = getattr(logo, "file_path", None)
+        if iso_lang == target_lang and file_path:
+            return format_tmdb_image(file_path, "w300")
+
+    # 2. English fallback
     for logo in logos:
         iso_lang = getattr(logo, "iso_639_1", None)
         file_path = getattr(logo, "file_path", None)
         if iso_lang == "en" and file_path:
             return format_tmdb_image(file_path, "w300")
+
+    # 3. Any fallback
     for logo in logos:
         file_path = getattr(logo, "file_path", None)
         if file_path:

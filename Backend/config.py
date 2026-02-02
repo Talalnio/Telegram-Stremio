@@ -19,6 +19,7 @@ class Telegram:
     DATABASE = [db.strip() for db in (getenv("DATABASE") or "").split(",") if db.strip()]
 
     TMDB_API = getenv("TMDB_API", "")
+    TMDB_LANGUAGE = getenv("TMDB_LANGUAGE", "ar-SA")
 
     UPSTREAM_REPO = getenv("UPSTREAM_REPO", "")
     UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "")
@@ -27,6 +28,20 @@ class Telegram:
     
     REPLACE_MODE = getenv("REPLACE_MODE", "true").lower() == "true"
     HIDE_CATALOG = getenv("HIDE_CATALOG", "false").lower() == "true"
+    
+    # Catalog Configuration
+    CATALOG_LATEST_MOVIES_ENABLED = getenv("CATALOG_LATEST_MOVIES_ENABLED", "true").lower() == "true"
+    CATALOG_LATEST_MOVIES_NAME = getenv("CATALOG_LATEST_MOVIES_NAME", "أحدث الأفلام")
+    
+    CATALOG_POPULAR_MOVIES_ENABLED = getenv("CATALOG_POPULAR_MOVIES_ENABLED", "true").lower() == "true"
+    CATALOG_POPULAR_MOVIES_NAME = getenv("CATALOG_POPULAR_MOVIES_NAME", "الأفلام الرائجة")
+    
+    CATALOG_LATEST_SERIES_ENABLED = getenv("CATALOG_LATEST_SERIES_ENABLED", "true").lower() == "true"
+    CATALOG_LATEST_SERIES_NAME = getenv("CATALOG_LATEST_SERIES_NAME", "أحدث المسلسلات")
+    
+    CATALOG_POPULAR_SERIES_ENABLED = getenv("CATALOG_POPULAR_SERIES_ENABLED", "true").lower() == "true"
+    CATALOG_POPULAR_SERIES_NAME = getenv("CATALOG_POPULAR_SERIES_NAME", "المسلسلات الرائجة")
+
     # SKIP_MULTIPART = getenv("SKIP_MULTIPART", "true").lower() == "true"
 
     ADMIN_USERNAME = getenv("ADMIN_USERNAME", "fyvio")
