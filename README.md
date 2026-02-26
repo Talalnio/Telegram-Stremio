@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://iili.io/KhN0ztj.png" alt="Logo" width="400"/>
+  <img src="https://iili.io/qfG8GDP.png" alt="Logo" width="400"/>
 </p>
 
 
