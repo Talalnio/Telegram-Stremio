@@ -35,7 +35,7 @@ def _plan_info_text(mention: str, username_str: str, user_id: int, duration, pri
         f"👤 <b>User:</b> {mention}\n"
         f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"🔗 <b>Username:</b> {username_str}\n\n"
-        f"📦 <b>Plan:</b> {duration} days (₹{price})"
+        f"📦 <b>Plan:</b> {duration} days (${price})"
     )
 
 
@@ -88,11 +88,11 @@ async def plan_selection(client: Client, callback_query: CallbackQuery):
 
     text = (
         f"<b>✅ Plan Selected: {plan['days']} Days</b>\n\n"
-        f"<b>💰 Price:</b> ₹{plan['price']}\n"
+        f"<b>💰 Price:</b> ${plan['price']}\n"
         f"<b>📅 Expiry (if approved now):</b> {expiry_str}\n\n"
         f"<b>📋 How to Pay:</b>\n"
     )
-    text += f"{payment_instructions}\n\n" if payment_instructions else f"Pay ₹{plan['price']} to the admin.\n\n"
+    text += f"{payment_instructions}\n\n" if payment_instructions else f"Pay ${plan['price']} to the admin.\n\n"
     text += (
         "<b>After paying:</b> send your payment screenshot directly here "
         "(in this chat). The admin will review and activate your subscription."
@@ -105,7 +105,7 @@ async def plan_selection(client: Client, callback_query: CallbackQuery):
     try:
         if payment_qr_url:
             try:
-                await client.send_photo(chat_id=user_id, photo=payment_qr_url, caption=f"📷 Scan to pay ₹{plan['price']}")
+                await client.send_photo(chat_id=user_id, photo=payment_qr_url, caption=f"📷 Scan to pay ${plan['price']}")
             except Exception as qe:
                 LOGGER.warning(f"Could not send payment QR to {user_id}: {qe}")
         await client.send_message(chat_id=user_id, text=text, reply_markup=ForceReply(selective=True))
@@ -166,7 +166,7 @@ async def handle_payment_screenshot(client: Client, message: Message):
             f"<b>🔗 Username:</b> {username_str}\n\n"
             f"<b>📦 Plan Details:</b>\n"
             f"  • Duration: <b>{duration} days</b>\n"
-            f"  • Price: <b>₹{price}</b>\n\n"
+            f"  • Price: <b>${price}</b>\n\n"
             f"Please review the screenshot above and approve or reject."
         )
 
