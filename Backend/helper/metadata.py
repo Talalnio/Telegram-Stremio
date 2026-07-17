@@ -152,7 +152,21 @@ async def _tmdb_episode_details(tv_id, season, episode):
         return None
 
 # ----------------- Main Metadata -----------------
+def extract_part_number(filename: str) -> int:
+    part_match = re.search(r'(?:part|cd|disc|disk)[s._-]*(\d+)(?=\.\w+$)', filename, re.IGNORECASE)
+    if part_match:
+        return int(part_match.group(1))
+    return 0
+
 async def metadata(filename: str, channel: int, msg_id) -> dict | None:
+    # Save original filename for part number extraction
+    original_filename = filename
+    # Handle split/multipart files by stripping the part suffix from the filename FIRST
+    multipart_pattern = compile(r'(?:part|cd|disc|disk)[s._-]*\d+(?=\.\w+$)', IGNORECASE)
+    filename = multipart_pattern.sub('', filename)
+    # Extract part number from original filename
+    part_number = extract_part_number(original_filename)
+
     try:
         parsed = PTN.parse(filename)
     except Exception as e:
@@ -162,13 +176,6 @@ async def metadata(filename: str, channel: int, msg_id) -> dict | None:
     # Skip combined/invalid files
     if "excess" in parsed and any("combined" in item.lower() for item in parsed["excess"]):
         LOGGER.info(f"Skipping {filename}: contains 'combined'")
-        return None
-
-    # Skip split/multipart files
-    # if Telegram.SKIP_MULTIPART:
-    multipart_pattern = compile(r'(?:part|cd|disc|disk)[s._-]*\d+(?=\.\w+$)', IGNORECASE)
-    if multipart_pattern.search(filename):
-        LOGGER.info(f"Skipping {filename}: seems to be a split/multipart file")
         return None
 
     title = parsed.get("title")
@@ -209,17 +216,17 @@ async def metadata(filename: str, channel: int, msg_id) -> dict | None:
 
     try:
         if season and episode:
-            LOGGER.info(f"Fetching TV metadata: {title} S{season}E{episode}")
-            return await fetch_tv_metadata(title, season, episode, encoded_string, year, quality, default_id)
+            LOGGER.info(f"Fetching TV metadata: {title} S{season}E{episode} (part {part_number})")
+            return await fetch_tv_metadata(title, season, episode, encoded_string, year, quality, default_id, part_number)
         else:
-            LOGGER.info(f"Fetching Movie metadata: {title} ({year})")
-            return await fetch_movie_metadata(title, encoded_string, year, quality, default_id)
+            LOGGER.info(f"Fetching Movie metadata: {title} ({year}) (part {part_number})")
+            return await fetch_movie_metadata(title, encoded_string, year, quality, default_id, part_number)
     except Exception as e:
         LOGGER.error(f"Error while fetching metadata for {filename}: {e}\n{traceback.format_exc()}")
         return None
 
 # ----------------- TV Metadata -----------------
-async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, quality=None, default_id=None) -> dict | None:
+async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, quality=None, default_id=None, part_number=0) -> dict | None:
     imdb_id = None
     tmdb_id = None
     imdb_tv = None
@@ -349,6 +356,7 @@ async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, q
 
             "quality": quality,
             "encoded_string": encoded_string,
+            "part_number": part_number,
         }
 
     # =======================================================
@@ -387,7 +395,7 @@ async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, q
 
 
 # ----------------- Movie Metadata -----------------
-async def fetch_movie_metadata(title, encoded_string, year=None, quality=None, default_id=None) -> dict | None:
+async def fetch_movie_metadata(title, encoded_string, year=None, quality=None, default_id=None, part_number=0) -> dict | None:
     imdb_id = None
     tmdb_id = None
     imdb_details = None
@@ -493,6 +501,7 @@ async def fetch_movie_metadata(title, encoded_string, year=None, quality=None, d
             "genres": [g.name for g in (movie.genres or [])],
             "quality": quality,
             "encoded_string": encoded_string,
+            "part_number": part_number,
         }
 
     # =======================================================

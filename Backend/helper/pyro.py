@@ -9,7 +9,7 @@ from aiofiles.os import path as aiopath, remove as aioremove
 from pyrogram import Client
 from Backend.pyrofork.bot import StreamBot
 import re
-from pyrogram.types import BotCommand
+from pyrogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 from pyrogram import enums
 
 
@@ -153,13 +153,21 @@ commands = [
 
 async def setup_bot_commands(bot: Client):
     try:
-        current_commands = await bot.get_bot_commands()
-        if current_commands:
-            LOGGER.info(f"Found {len(current_commands)} existing commands. Deleting them...")
-            await bot.set_bot_commands([])
-        
-        await bot.set_bot_commands(commands)
-        LOGGER.info("Bot commands updated successfully.")
+        await bot.set_bot_commands([], scope=BotCommandScopeDefault())
+
+        admin_ids = set()
+        if getattr(Telegram, "OWNER_ID", None):
+            admin_ids.add(int(Telegram.OWNER_ID))
+        for uid in (getattr(Telegram, "REQUESTS_ADMIN_IDS", None) or []):
+            try:
+                admin_ids.add(int(uid))
+            except Exception:
+                continue
+
+        for uid in sorted(admin_ids):
+            await bot.set_bot_commands(commands, scope=BotCommandScopeChat(chat_id=uid))
+
+        LOGGER.info("Bot commands updated successfully (admins only).")
     except Exception as e:
         LOGGER.error(f"Error setting up bot commands: {e}")
 

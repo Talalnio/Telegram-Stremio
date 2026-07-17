@@ -24,4 +24,6 @@ Helper = Client(
 
 multi_clients = {}
 work_loads = {}
-client_dc_map = {} 
+client_dc_map = {}
+client_failures = {}  # tracks cumulative chunk-fetch failures per client index
+client_avg_mbps = {}  # rolling average MB/s per client (updated after each stream)

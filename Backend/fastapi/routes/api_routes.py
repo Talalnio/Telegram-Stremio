@@ -1,7 +1,11 @@
+import asyncio
+import json
 from fastapi import Request, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from Backend import db, StartTime, __version__
 from Backend.helper.pyro import get_readable_time
 from Backend.pyrofork.bot import multi_clients, StreamBot
+from Backend.helper.custom_dl import run_speed_test, _speed_test_single_client
 from time import time
 
 
@@ -33,6 +37,19 @@ async def get_system_stats_api():
             "server_status": "error", 
             "error": str(e)
         }
+
+
+async def sync_library_api() -> dict:
+    from Backend.config import Telegram
+    from Backend.helper.library_sync import sync_all
+
+    if not Telegram.LIBRARY_TOKEN:
+        raise HTTPException(status_code=400, detail="LIBRARY_TOKEN is required to sync library")
+
+    if not Telegram.LIBRARY_PATH:
+        raise HTTPException(status_code=400, detail="LIBRARY_PATH is required to sync library")
+
+    return await sync_all(Telegram.LIBRARY_PATH, Telegram.LIBRARY_TOKEN)
     
 # --- API Routes for Media Management ---
 
@@ -256,5 +273,456 @@ async def revoke_token_api(token: str):
             return {"message": "Token revoked successfully"}
         else:
             raise HTTPException(status_code=404, detail="Token not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Speed Test API ---
+
+async def speed_test_api(
+    quality_id: str = Query(..., description="Encoded quality ID from DB"),
+    tmdb_id: int = Query(...),
+    db_index: int = Query(...),
+    media_type: str = Query(..., regex="^(movie|tv)$"),
+):
+    """
+    Decode quality_id using the same decode_string logic as the stream handler,
+    then run a parallel download speed test across all connected bot clients.
+    """
+    from Backend.helper.encrypt import decode_string
+
+    try:
+        decoded = await decode_string(quality_id)
+        msg_id  = decoded.get("msg_id")
+        raw_cid = decoded.get("chat_id")
+
+        if not msg_id or not raw_cid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Decoded quality data is missing msg_id or chat_id. Decoded: {decoded}"
+            )
+
+        # Stream handler adds -100 prefix for channel IDs
+        chat_id = int(f"-100{raw_cid}")
+
+        results = await run_speed_test(int(chat_id), int(msg_id))
+        return {"results": results, "total_clients_tested": len(results)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Speed Test SSE Streaming API ---
+
+async def speed_test_stream_api(
+    quality_id: str,
+    tmdb_id: int,
+    db_index: int,
+    media_type: str,
+):
+    """
+    SSE version of the speed test. Streams each per-client result as a
+    'data:' event the moment that client finishes, so the UI can update live.
+    """
+    from Backend.helper.encrypt import decode_string
+
+    async def event_generator():
+        # Decode quality_id → chat_id + message_id
+        try:
+            decoded = await decode_string(quality_id)
+            msg_id  = decoded.get("msg_id")
+            raw_cid = decoded.get("chat_id")
+            if not msg_id or not raw_cid:
+                payload = json.dumps({"type": "error", "message": f"Cannot decode quality_id. Got: {decoded}"})
+                yield f"data: {payload}\n\n"
+                return
+            chat_id = int(f"-100{raw_cid}")
+        except Exception as exc:
+            payload = json.dumps({"type": "error", "message": str(exc)})
+            yield f"data: {payload}\n\n"
+            return
+
+        total = len(multi_clients)
+        if total == 0:
+            payload = json.dumps({"type": "error", "message": "No bot clients connected"})
+            yield f"data: {payload}\n\n"
+            return
+            
+        # Try to resolve the FileId to get the target DC
+        target_dc = "?"
+        try:
+            from Backend.helper.custom_dl import ByteStreamer
+            primary_client = multi_clients.get(0) or next(iter(multi_clients.values()))
+            streamer = ByteStreamer(primary_client)
+            file_id = await streamer.get_file_properties(chat_id, int(msg_id))
+            target_dc = file_id.dc_id
+        except Exception:
+            pass
+
+        # Send initial "start" event so the frontend can set up the table
+        yield f"data: {json.dumps({'type': 'start', 'total': total, 'target_dc': target_dc})}\n\n"
+
+        # Run all clients in parallel; feed results into a queue as they finish
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def run_one(client, idx):
+            async def on_progress(prog_data):
+                await queue.put({"type": "progress", "data": prog_data})
+                
+            result = await _speed_test_single_client(
+                client, idx, chat_id, int(msg_id), progress_callback=on_progress
+            )
+            await queue.put({"type": "result", "data": result})
+
+        tasks = [
+            asyncio.create_task(run_one(client, idx))
+            for idx, client in multi_clients.items()
+        ]
+
+        completed = 0
+        while completed < total:
+            msg = await queue.get()
+            
+            if msg["type"] == "progress":
+                payload = json.dumps(msg)
+                yield f"data: {payload}\n\n"
+            
+            elif msg["type"] == "result":
+                completed += 1
+                payload = json.dumps({
+                    "type": "result",
+                    "data": msg["data"],
+                    "completed": completed,
+                    "total": total,
+                })
+                yield f"data: {payload}\n\n"
+
+        # Wait for any remaining tasks (should already be done)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Final done event
+        yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # prevent nginx from buffering SSE
+        },
+    )
+
+# ---------------------------------------------------------------------------
+# Admin API Routes
+# ---------------------------------------------------------------------------
+
+async def get_admin_stats_api() -> dict:
+    from Backend.pyrofork.bot import work_loads, multi_clients, client_failures, client_avg_mbps
+    from Backend.fastapi.routes.stream_routes import _streamer_by_client
+    
+    # Sum cache entries across all active ByteStreamer instances
+    cache_size = sum(len(s._file_id_cache) for s in _streamer_by_client.values())
+    
+    # Calculate bot workloads and health
+    bot_stats = []
+    for client_index in multi_clients:
+        load = work_loads.get(client_index, 0)
+        failures = client_failures.get(client_index, 0)
+        mbps = client_avg_mbps.get(client_index, 0.0)
+        
+        status = "healthy"
+        if failures > 5:
+            status = "degraded"
+        if failures > 15:
+            status = "failing"
+            
+        bot_stats.append({
+            "client_index": client_index,
+            "display_name": f"Bot {client_index + 1}",
+            "current_load": load,
+            "failures": failures,
+            "avg_mbps": round(mbps, 2),
+            "status": status
+        })
+        
+    return {
+        "cache_size": cache_size,
+        "total_bots": len(multi_clients),
+        "bot_workloads": bot_stats
+    }
+
+async def clear_cache_api() -> dict:
+    from Backend.fastapi.routes.stream_routes import _streamer_by_client
+    from Backend.logger import LOGGER
+    
+    # Clear cache across all active ByteStreamer instances
+    total_cleared = sum(len(s._file_id_cache) for s in _streamer_by_client.values())
+    for streamer in _streamer_by_client.values():
+        streamer._file_id_cache.clear()
+    LOGGER.info(f"Admin cleared the FileId cache ({total_cleared} items purged across {len(_streamer_by_client)} clients).")
+    
+    return {"status": "success", "message": f"{total_cleared} cached items cleared."}
+
+async def get_dead_links_api() -> dict:
+    from Backend import db
+    try:
+        dead_links = await db.get_all_dead_links()
+        return {"status": "success", "data": dead_links}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+async def get_stream_analytics_api() -> dict:
+    from Backend import db
+    try:
+        data = await db.get_stream_analytics(limit=200)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        from Backend.logger import LOGGER
+        LOGGER.error(f"Stream analytics API error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# ---------------------------------------------------------------------------
+# Admin Subscription Management API Routes
+# ---------------------------------------------------------------------------
+
+async def get_subscription_plans_api() -> dict:
+    from Backend import db
+    try:
+        plans = await db.get_subscription_plans()
+        return {"status": "success", "data": plans}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+async def add_subscription_plan_api(payload: dict) -> dict:
+    from Backend import db
+    try:
+        days = int(payload.get("days", 0))
+        price = float(payload.get("price", 0.0))
+        if days <= 0 or price < 0:
+            raise HTTPException(status_code=400, detail="Invalid plan parameters")
+            
+        plan_id = await db.add_subscription_plan(days, price)
+        if plan_id:
+            return {"status": "success", "message": "Plan added successfully", "plan_id": plan_id}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to add plan")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def update_subscription_plan_api(plan_id: str, payload: dict) -> dict:
+    from Backend import db
+    try:
+        days = int(payload.get("days", 0))
+        price = float(payload.get("price", 0.0))
+        if days <= 0 or price < 0:
+             raise HTTPException(status_code=400, detail="Invalid plan parameters")
+             
+        success = await db.update_subscription_plan(plan_id, days, price)
+        if success:
+             return {"status": "success", "message": "Plan updated successfully"}
+        else:
+             raise HTTPException(status_code=404, detail="Plan not found or update failed")
+    except HTTPException:
+         raise
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+async def delete_subscription_plan_api(plan_id: str) -> dict:
+    from Backend import db
+    try:
+        success = await db.delete_subscription_plan(plan_id)
+        if success:
+            return {"status": "success", "message": "Plan deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Plan not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def get_all_subscribers_api() -> dict:
+    from Backend import db
+    try:
+        users = await db.get_all_subscribers()
+        return {"status": "success", "data": users}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+async def manage_subscriber_api(user_id: int, payload: dict) -> dict:
+    from Backend import db
+    try:
+        action = payload.get("action")
+        days = int(payload.get("days", 0))
+        
+        if action not in ["extend", "reduce", "delete"]:
+            raise HTTPException(status_code=400, detail="Invalid action")
+            
+        success = await db.manage_subscriber(user_id, action, days)
+        if success:
+            return {"status": "success", "message": "User subscription updated successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="User not found or update failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Access Management API ---
+
+async def get_all_tokens_api() -> dict:
+    from Backend import db
+    from Backend.config import Telegram
+    from datetime import datetime
+    try:
+        tokens = await db.get_all_api_tokens()
+        now = datetime.utcnow()
+        result = []
+
+        # Pre-load all subscribers into a dict keyed by user_id for O(1) lookup
+        subscriber_map = {}       # user_id (str) -> user doc
+        if Telegram.SUBSCRIPTION:
+            try:
+                for u in await db.get_all_subscribers():
+                    uid = str(u.get("_id"))
+                    subscriber_map[uid] = u
+            except Exception:
+                pass
+
+        def display_name(user, user_id, token_name=None):
+            """Return a non-empty display name for a user."""
+            if user:
+                n = user.get("first_name") or user.get("username")
+                if n:
+                    return n
+            # Fall back to the name stored on the token itself (set at creation time)
+            if token_name:
+                return token_name
+            return f"User {user_id}" if user_id else "Telegram User"
+
+        def build_entry(user_id, user, token_doc):
+            """Build a unified access entry from optional user + token records."""
+            expiry = None
+            sub_status = None
+            user_found = bool(user)
+
+            if user:
+                sub_status = user.get("subscription_status")
+                expiry = user.get("subscription_expiry")
+
+            # Token-level expiry as fallback
+            if token_doc:
+                t_expiry = token_doc.get("subscription_expiry") or token_doc.get("expires_at")
+                if t_expiry and not expiry:
+                    expiry = t_expiry
+
+            # Determine status
+            if Telegram.SUBSCRIPTION:
+                if not user_found:
+                    is_expired = True
+                elif sub_status != "active":
+                    is_expired = True
+                elif not expiry:
+                    is_expired = True
+                else:
+                    is_expired = expiry < now
+            else:
+                is_expired = bool(expiry and expiry < now)
+
+            token_str = token_doc.get("token") if token_doc else None
+            created = token_doc.get("created_at") if token_doc else (user.get("created_at") if user else None)
+
+            return {
+                "token": token_str,
+                "user_id": user_id,
+                "user_name": display_name(user, user_id, token_doc.get("name") if token_doc else None),
+                "user_found": user_found,
+                "has_token": bool(token_str),
+                "created_at": created.isoformat() if created else None,
+                "expires_at": expiry.isoformat() if expiry else None,
+                "is_expired": is_expired,
+                "sub_status": sub_status,
+                "addon_url": (
+                    f"{Telegram.BASE_URL}/stremio/{token_str}/manifest.json"
+                    if token_str else None
+                ),
+            }
+
+        # Track user_ids that are already represented via a token row
+        seen_user_ids = set()
+
+        # --- 1. Process all existing tokens ---
+        for t in tokens:
+            token_user_id = t.get("user_id")
+
+            # Try to resolve user from subscriber_map using token's user_id
+            user = None
+            if token_user_id:
+                uid_str = str(token_user_id)
+                user = subscriber_map.get(uid_str)
+                if not user:
+                    # Fallback: query DB if not in subscriber_map (e.g. non-active subscribers)
+                    try:
+                        user = await db.get_user(int(token_user_id))
+                    except Exception:
+                        pass
+                seen_user_ids.add(uid_str)
+
+            result.append(build_entry(token_user_id, user, t))
+
+        # --- 2. Add subscribers who have NO token ---
+        for uid_str, u in subscriber_map.items():
+            if uid_str in seen_user_ids:
+                continue  # already covered by a token row
+            result.append(build_entry(u.get("_id"), u, None))
+
+        # Sort: active-with-token first, then active-no-token, expired last
+        result.sort(key=lambda x: (x["is_expired"], not x["has_token"]))
+        return {"tokens": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def revoke_token_api(token: str) -> dict:
+    from Backend import db
+    try:
+        success = await db.revoke_api_token(token)
+        if success:
+            return {"status": "success", "message": "Token revoked."}
+        raise HTTPException(status_code=404, detail="Token not found.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def assign_plan_api(user_id: int, days: int) -> dict:
+    """Assign (or extend) a subscription for any user by user_id, even if not in DB."""
+    from Backend import db
+    try:
+        if days < 1:
+            raise HTTPException(status_code=400, detail="Days must be at least 1.")
+        result = await db.assign_subscription(user_id, days)
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def link_token_user_api(token: str, user_id: int) -> dict:
+    """Link an orphan token (no user_id) to a Telegram user_id."""
+    from Backend import db
+    try:
+        success = await db.link_token_user(token, user_id)
+        if success:
+            return {"status": "success", "message": f"Token linked to user {user_id}."}
+        raise HTTPException(status_code=404, detail="Token not found or already linked.")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

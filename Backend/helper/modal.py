@@ -10,6 +10,7 @@ class QualityDetail(BaseModel):
     id: str
     name: str
     size: str
+    part_number: int = 0
 
 
 # ---------------------------

@@ -10,6 +10,9 @@ from Backend.fastapi import server
 from Backend.helper.pyro import restart_notification, setup_bot_commands
 from Backend.pyrofork.bot import Helper, StreamBot
 from Backend.pyrofork.clients import initialize_clients
+from Backend.helper.link_checker import DeadLinkChecker
+from Backend.fastapi.main import app
+from Backend.config import Telegram
 
 loop = get_event_loop()
 
@@ -42,6 +45,21 @@ async def start_services():
         await restart_notification()
         loop.create_task(server.serve())
         loop.create_task(ping())
+        
+        # Start the background Dead Link Checker
+        link_checker_task = DeadLinkChecker(db, app, check_interval_hours=24)
+        loop.create_task(link_checker_task.start())
+
+        if Telegram.NOTIFY_ENABLED:
+            from Backend.helper.notify_bot import notify_loop
+            loop.create_task(notify_loop(StreamBot))
+            LOGGER.info("Notify Bot Task Started.")
+        
+        # Start Subscription Background Task
+        if Telegram.SUBSCRIPTION:
+            from Backend.helper.subscription_checker import subscription_checker_loop
+            loop.create_task(subscription_checker_loop(StreamBot))
+            LOGGER.info("Subscription Checker Task Started.")
         
         LOGGER.info("Telegram-Stremio Started Successfully!")
         await idle()

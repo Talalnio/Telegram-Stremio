@@ -5,17 +5,26 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from Backend import __version__
 from Backend.fastapi.security.credentials import require_auth
-from Backend.fastapi.routes.stream_routes import router as stream_router
+from Backend.fastapi.routes.stream_routes import router as stream_router, decay_client_failures
 from Backend.fastapi.routes.stremio_routes import router as stremio_router
 from Backend.fastapi.routes.template_routes import (
     login_page, login_post, logout, set_theme, dashboard_page,
-    media_management_page, edit_media_page, public_status_page, stremio_guide_page
+    media_management_page, edit_media_page, public_status_page, stremio_guide_page,
+    admin_dashboard_page, admin_subscriptions_page, admin_access_page
 )
 from Backend.fastapi.routes.api_routes import (
     list_media_api, delete_media_api, update_media_api,
     delete_movie_quality_api, delete_tv_quality_api,
     delete_tv_episode_api, delete_tv_season_api,
-    create_token_api, revoke_token_api, update_token_limits_api
+    create_token_api, revoke_token_api, update_token_limits_api,
+    speed_test_api, speed_test_stream_api,
+    get_admin_stats_api, clear_cache_api, get_dead_links_api,
+    get_stream_analytics_api,
+    get_subscription_plans_api, add_subscription_plan_api,
+    update_subscription_plan_api, delete_subscription_plan_api,
+    get_all_subscribers_api, manage_subscriber_api,
+    get_all_tokens_api, assign_plan_api, link_token_user_api,
+    sync_library_api,
 )
 
 app = FastAPI(
@@ -38,6 +47,35 @@ try:
     app.mount("/static", StaticFiles(directory="Backend/fastapi/static"), name="static")
 except Exception:
     pass
+
+@app.on_event("startup")
+async def _startup():
+    import asyncio
+    asyncio.create_task(decay_client_failures())
+    try:
+        from Backend.config import Telegram
+        if Telegram.AUTO_SYNC_LIBRARY and Telegram.LIBRARY_TOKEN and Telegram.LIBRARY_PATH and Telegram.BASE_URL:
+            from Backend.helper.library_sync import sync_all
+
+            async def _run():
+                await asyncio.sleep(max(0, Telegram.AUTO_SYNC_LIBRARY_DELAY))
+                await sync_all(Telegram.LIBRARY_PATH, Telegram.LIBRARY_TOKEN)
+
+            asyncio.create_task(_run())
+
+            if Telegram.AUTO_SYNC_LIBRARY_INTERVAL_MIN and Telegram.AUTO_SYNC_LIBRARY_INTERVAL_MIN > 0:
+                async def _loop():
+                    await asyncio.sleep(max(0, Telegram.AUTO_SYNC_LIBRARY_DELAY))
+                    while True:
+                        try:
+                            await sync_all(Telegram.LIBRARY_PATH, Telegram.LIBRARY_TOKEN)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(max(60, Telegram.AUTO_SYNC_LIBRARY_INTERVAL_MIN * 60))
+
+                asyncio.create_task(_loop())
+    except Exception:
+        pass
 
 # --- Include existing API routers ---
 app.include_router(stream_router)
@@ -72,6 +110,10 @@ async def stremio_guide(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request, _: bool = Depends(require_auth)):
     return await dashboard_page(request, _)
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, _: bool = Depends(require_auth)):
+    return await admin_dashboard_page(request, _)
 
 @app.get("/media/manage", response_class=HTMLResponse)
 async def media_management(request: Request, media_type: str = "movie", _: bool = Depends(require_auth)):
@@ -146,6 +188,102 @@ async def revoke_token(token: str, _: bool = Depends(require_auth)):
 async def get_system_stats(_: bool = Depends(require_auth)):
     from Backend.fastapi.routes.api_routes import get_system_stats_api
     return await get_system_stats_api()
+
+@app.post("/api/library/sync")
+@app.get("/api/library/sync")
+async def library_sync(_: bool = Depends(require_auth)):
+    return await sync_library_api()
+
+@app.get("/api/admin/system-stats")
+async def admin_system_stats(_: bool = Depends(require_auth)):
+    return await get_admin_stats_api()
+
+@app.post("/api/admin/clear-cache")
+async def clear_cache(_: bool = Depends(require_auth)):
+    return await clear_cache_api()
+
+@app.get("/api/admin/dead-links")
+async def get_dead_links(_: bool = Depends(require_auth)):
+    return await get_dead_links_api()
+
+@app.get("/api/admin/stream-analytics")
+async def get_stream_analytics(_: bool = Depends(require_auth)):
+    return await get_stream_analytics_api()
+
+@app.get("/admin/subscriptions", response_class=HTMLResponse)
+async def admin_subscriptions(request: Request, _: bool = Depends(require_auth)):
+    return await admin_subscriptions_page(request, _)
+
+@app.get("/api/admin/subscriptions/plans")
+async def get_subscription_plans(_: bool = Depends(require_auth)):
+    return await get_subscription_plans_api()
+
+@app.post("/api/admin/subscriptions/plans")
+async def add_subscription_plan(payload: dict, _: bool = Depends(require_auth)):
+    return await add_subscription_plan_api(payload)
+
+@app.put("/api/admin/subscriptions/plans/{plan_id}")
+async def update_subscription_plan(plan_id: str, payload: dict, _: bool = Depends(require_auth)):
+    return await update_subscription_plan_api(plan_id, payload)
+
+@app.delete("/api/admin/subscriptions/plans/{plan_id}")
+async def delete_subscription_plan(plan_id: str, _: bool = Depends(require_auth)):
+    return await delete_subscription_plan_api(plan_id)
+
+@app.get("/api/admin/subscriptions/users")
+async def get_subscribers(_: bool = Depends(require_auth)):
+    return await get_all_subscribers_api()
+
+@app.post("/api/admin/subscriptions/users/{user_id}/manage")
+async def manage_subscriber(user_id: int, payload: dict, _: bool = Depends(require_auth)):
+    return await manage_subscriber_api(user_id, payload)
+
+# --- Access Management ---
+@app.get("/admin/access", response_class=HTMLResponse)
+async def admin_access(request: Request, _: bool = Depends(require_auth)):
+    return await admin_access_page(request, _)
+
+@app.get("/api/admin/access/tokens")
+async def get_access_tokens(_: bool = Depends(require_auth)):
+    return await get_all_tokens_api()
+
+@app.delete("/api/admin/access/tokens/{token}")
+async def delete_access_token(token: str, _: bool = Depends(require_auth)):
+    from Backend.fastapi.routes.api_routes import revoke_token_api as _revoke_token_api
+    return await _revoke_token_api(token)
+
+@app.post("/api/admin/access/users/{user_id}/assign-plan")
+async def assign_access_plan(user_id: int, payload: dict, _: bool = Depends(require_auth)):
+    days = int(payload.get("days", 0))
+    return await assign_plan_api(user_id, days)
+
+@app.patch("/api/admin/access/tokens/{token}/link-user")
+async def link_token_to_user(token: str, payload: dict, _: bool = Depends(require_auth)):
+    user_id = int(payload.get("user_id", 0))
+    if not user_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    return await link_token_user_api(token, user_id)
+
+@app.get("/api/system/speedtest")
+async def speed_test(
+    quality_id: str = Query(...),
+    tmdb_id: int = Query(...),
+    db_index: int = Query(...),
+    media_type: str = Query(...),
+    _: bool = Depends(require_auth)
+):
+    return await speed_test_api(quality_id, tmdb_id, db_index, media_type)
+
+@app.get("/api/system/speedtest/stream")
+async def speed_test_stream(
+    quality_id: str = Query(...),
+    tmdb_id: int = Query(...),
+    db_index: int = Query(...),
+    media_type: str = Query(...),
+    _: bool = Depends(require_auth)
+):
+    return await speed_test_stream_api(quality_id, tmdb_id, db_index, media_type)
 
 @app.exception_handler(401)
 async def auth_exception_handler(request: Request, exc):

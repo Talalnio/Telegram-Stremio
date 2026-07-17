@@ -6,10 +6,33 @@ services:
       - "8000:8000"
     volumes:
       - ./config.env:/app/config.env
-      - ./Backend:/app/Backend
+      - ./stremio_library:/app/library
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
         max-size: "1m"     
         max-file: "3"      
+
+  zurg:
+    image: ghcr.io/debridmediamanager/zurg-testing:latest
+    container_name: zurg
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./config.env:/app/config.env:ro
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - >-
+          set -e;
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+          RD_TOKEN="$$(grep -E '^[[:space:]]*RD_TOKEN[[:space:]]*=' /app/config.env | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$$//; s/^\"//; s/\"$$//')";
+          if [ -z "$$RD_TOKEN" ]; then echo "RD_TOKEN is missing in /app/config.env"; exit 1; fi;
+          printf "%s\n" "zurg: v1" "token: $$RD_TOKEN" "host: \"[::]\"" "port: 9999" "retain_rd_torrent_name: false" "retain_folder_name_extension: false" "expose_full_path: true" "enable_repair: true" "auto_delete_rar_torrents: true" "serve_from_rclone: false" "verify_download_link: false" "directories:" "  shows:" "    group_order: 20" "    group: media" "    filters:" "      - has_episodes: true" "  movies:" "    group_order: 30" "    group: media" "    only_show_the_biggest_file: true" "    filters:" "      - regex: /.*/" > /tmp/config.yml;
+          exec /app/zurg -c /tmp/config.yml
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"

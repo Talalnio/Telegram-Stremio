@@ -18,10 +18,39 @@ from Backend.config import Telegram
 from Backend.logger import LOGGER
 from Backend.fastapi.security.tokens import verify_token
 import asyncio
+from urllib.parse import quote
 
 router = APIRouter(tags=["Streaming"])
 
 _streamer_by_client: Dict = {}
+
+
+async def decay_client_failures():
+    from Backend.pyrofork.bot import client_failures
+
+    while True:
+        try:
+            await asyncio.sleep(60)
+            if not client_failures:
+                continue
+
+            for k, v in list(client_failures.items()):
+                try:
+                    nv = int(v) - 1
+                except Exception:
+                    nv = 0
+
+                if nv > 0:
+                    client_failures[k] = nv
+                else:
+                    client_failures.pop(k, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            try:
+                LOGGER.error(f"decay_client_failures error: {e}")
+            except Exception:
+                pass
 
 
 def make_json_safe(obj):
@@ -90,6 +119,19 @@ def select_best_client(target_dc: int) -> int:
         return selected
 
     return 0
+
+
+def _content_disposition_inline(filename: str) -> str:
+    name = (filename or "video").strip() or "video"
+    safe_ascii = "".join(ch if ord(ch) < 128 else "_" for ch in name)
+    safe_ascii = safe_ascii.replace('"', "_").replace("\\", "_").strip()
+    if not safe_ascii:
+        safe_ascii = "video"
+    if "." not in safe_ascii:
+        safe_ascii = f"{safe_ascii}.bin"
+
+    encoded = quote(name, safe="")
+    return f'inline; filename="{safe_ascii}"; filename*=UTF-8\'\'{encoded}'
 
 
 async def track_usage_from_stats(stream_id: str, token: str, token_data: dict):
@@ -263,7 +305,7 @@ async def media_streamer(
     headers = {
         "Content-Type": mime_type,
         "Content-Length": str(req_length),
-        "Content-Disposition": f'inline; filename="{file_name}"',
+        "Content-Disposition": _content_disposition_inline(file_name),
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=3600, immutable",
         "Access-Control-Allow-Origin": "*",

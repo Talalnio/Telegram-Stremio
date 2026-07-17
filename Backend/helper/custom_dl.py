@@ -451,3 +451,79 @@ class ByteStreamer:
             await asyncio.sleep(self.CLEAN_INTERVAL)
             self._file_id_cache.clear()
             LOGGER.debug("ByteStreamer: cleared file_id cache")
+
+
+async def _speed_test_single_client(
+    client: Client,
+    chat_id: int,
+    msg_id: int,
+    client_index: int,
+    sample_bytes: int = 8 * 1024 * 1024,
+) -> dict:
+    streamer = ByteStreamer(client)
+    t0 = time.perf_counter()
+    try:
+        file_id = await streamer.get_file_properties(chat_id=chat_id, message_id=msg_id)
+        media_session = await streamer._get_media_session(file_id)
+        location = await streamer._get_location(file_id)
+
+        file_size = int(getattr(file_id, "file_size", 0) or 0)
+        if file_size <= 0:
+            raise ValueError("Unknown file size")
+
+        to_read = min(sample_bytes, file_size)
+        offset = 0
+        total = 0
+        limit = min(ByteStreamer.CHUNK_SIZE, to_read)
+
+        while total < to_read:
+            r = await media_session.send(
+                raw.functions.upload.GetFile(
+                    location=location,
+                    offset=offset,
+                    limit=limit,
+                )
+            )
+            chunk = getattr(r, "bytes", b"") if r else b""
+            if not chunk:
+                break
+            total += len(chunk)
+            offset += len(chunk)
+
+        dt = max(time.perf_counter() - t0, 1e-6)
+        mbps = (total / (1024 * 1024)) / dt
+
+        return {
+            "client_index": client_index,
+            "dc_id": getattr(file_id, "dc_id", None),
+            "bytes": total,
+            "duration": round(dt, 3),
+            "mbps": round(mbps, 3),
+            "ok": True,
+        }
+    except Exception as e:
+        dt = max(time.perf_counter() - t0, 1e-6)
+        return {
+            "client_index": client_index,
+            "dc_id": None,
+            "bytes": 0,
+            "duration": round(dt, 3),
+            "mbps": 0.0,
+            "ok": False,
+            "error": str(e),
+        }
+
+
+async def run_speed_test(chat_id: int, msg_id: int, sample_bytes: int = 8 * 1024 * 1024) -> list:
+    from Backend.pyrofork.bot import multi_clients
+
+    if not multi_clients:
+        return []
+
+    tasks = []
+    for idx, client in multi_clients.items():
+        tasks.append(_speed_test_single_client(client, chat_id, msg_id, idx, sample_bytes=sample_bytes))
+
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    results.sort(key=lambda r: (r.get("ok") is True, r.get("mbps", 0.0)), reverse=True)
+    return results

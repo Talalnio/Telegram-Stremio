@@ -114,73 +114,265 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         catalogs = []
     else:
         resources = ["catalog", "meta", "stream"]
-        catalogs = []
-        
-        if Telegram.CATALOG_LATEST_MOVIES_ENABLED:
-            catalogs.append({
+        catalogs = [
+            {
                 "type": "movie",
                 "id": "latest_movies",
-                "name": Telegram.CATALOG_LATEST_MOVIES_NAME,
+                "name": "Latest",
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
-            })
-            
-        if Telegram.CATALOG_POPULAR_MOVIES_ENABLED:
-            catalogs.append({
+            },
+            {
                 "type": "movie",
                 "id": "top_movies",
-                "name": Telegram.CATALOG_POPULAR_MOVIES_NAME,
+                "name": "Popular",
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
                 "extraSupported": ["genre", "skip", "search"]
-            })
-            
-        if Telegram.CATALOG_LATEST_SERIES_ENABLED:
-            catalogs.append({
+            },
+            {
                 "type": "series",
                 "id": "latest_series",
-                "name": Telegram.CATALOG_LATEST_SERIES_NAME,
+                "name": "Latest",
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
-            })
-            
-        if Telegram.CATALOG_POPULAR_SERIES_ENABLED:
-            catalogs.append({
+            },
+            {
                 "type": "series",
                 "id": "top_series",
-                "name": Telegram.CATALOG_POPULAR_SERIES_NAME,
+                "name": "Popular",
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
                 "extraSupported": ["genre", "skip", "search"]
-            })
+            }
+        ]
+
+    # Build dynamic name/description/version with subscription info
+    addon_name = ADDON_NAME
+    addon_desc = "Streams movies and series from your Telegram."
+    addon_version = ADDON_VERSION
+    expiry_obj = None
+
+    if Telegram.SUBSCRIPTION:
+        user_id = token_data.get("user_id")
+        if user_id:
+            from Backend import db as _db
+            try:
+                user = await _db.get_user(int(user_id))
+                if user and user.get("subscription_status") == "active":
+                    expiry_obj = user.get("subscription_expiry")
+                    if expiry_obj:
+                        expiry_str = expiry_obj.strftime("%d %b %Y").lstrip("0")
+                        addon_name = f"{ADDON_NAME} — Expires {expiry_str}"
+                        addon_desc = (
+                            f"📅 Subscription active until {expiry_str}.\n"
+                            f"Streams movies and series from your Telegram."
+                        )
+                        # Encode expiry epoch (low 16 bits, hex) into version so
+                        # Stremio detects a change when subscription is updated.
+                        epoch_tag = format(int(expiry_obj.timestamp()) & 0xFFFF, "x")
+                        addon_version = f"{ADDON_VERSION}-{epoch_tag}"
+                    else:
+                        addon_name = f"{ADDON_NAME} — Active"
+                        addon_desc = "✅ Subscription active.\nStreams movies and series from your Telegram."
+            except Exception:
+                pass  # Fallback to defaults on error
+
+    # Configure URL — opening this reinstalls the addon with latest manifest
+    configure_url = f"{Telegram.BASE_URL}/stremio/{token}/configure"
 
     return {
-        "id": "telegram.media",
-        "version": ADDON_VERSION,
-        "name": ADDON_NAME,
+        "id": f"telegram.media.{token[:8]}",   # per-user ID so each token is independent
+        "version": addon_version,
+        "name": addon_name,
         "logo": "https://i.postimg.cc/XqWnmDXr/Picsart-25-10-09-08-09-45-867.png",
-        "description": "Streams movies and series from your Telegram.",
+        "description": addon_desc,
         "types": ["movie", "series"],
         "resources": resources,
         "catalogs": catalogs,
         "idPrefixes": ["tt"],
         "behaviorHints": {
-            "configurable": False,
+            "configurable": True,
             "configurationRequired": False
-        }
+        },
+        "config": [
+            {
+                "key": "manifest_url",
+                "title": "Your Addon URL (copy to reinstall)",
+                "type": "text",
+                "default": f"{Telegram.BASE_URL}/stremio/{token}/manifest.json"
+            }
+        ]
     }
+
+
+@router.get("/{token}/configure")
+async def configure_addon(token: str):
+    """
+    Configure/update page for the Stremio addon.
+    Uses the correct stremio://addon_install?manifest= deep-link so Stremio
+    actually shows the Install/Update dialog when the button is clicked.
+    """
+    from urllib.parse import quote
+    from fastapi.responses import HTMLResponse
+    from Backend import db as _db
+
+    manifest_url = f"{Telegram.BASE_URL}/stremio/{token}/manifest.json"
+    # Universal Stremio web install — works on desktop and mobile
+    web_install_url = f"https://web.stremio.com/#/?addon_manifest={quote(manifest_url, safe='')}"
+
+    # Fetch user info for display
+    token_doc = await _db.get_api_token(token)
+    user_name = "Unknown"
+    expiry_str = "N/A"
+    status_color = "#ef4444"
+    status_text = "Unknown"
+
+    if token_doc:
+        uid = token_doc.get("user_id")
+        if uid:
+            try:
+                user = await _db.get_user(int(uid))
+                if user:
+                    user_name = user.get("first_name") or user.get("username") or f"User {uid}"
+                    sub_status = user.get("subscription_status", "")
+                    expiry = user.get("subscription_expiry")
+                    if expiry:
+                        expiry_str = expiry.strftime("%d %b %Y").lstrip("0")
+                    if sub_status == "active":
+                        status_color = "#22c55e"
+                        status_text = "✅ Active"
+                    else:
+                        status_color = "#ef4444"
+                        status_text = "🔴 Expired"
+            except Exception:
+                pass
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Update Telegram Stremio Addon</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f1a; color: #e2e8f0;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }}
+    .card {{
+      background: #1e1e2e; border: 1px solid #2d2d44; border-radius: 16px;
+      padding: 40px 32px; max-width: 480px; width: 100%; text-align: center;
+    }}
+    .logo {{ font-size: 48px; margin-bottom: 12px; }}
+    h1 {{ font-size: 1.5rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; }}
+    .sub-title {{ color: #94a3b8; font-size: 0.9rem; margin-bottom: 28px; }}
+    .info-row {{
+      display: flex; justify-content: space-between; align-items: center;
+      background: #2a2a3e; border-radius: 10px; padding: 12px 16px;
+      margin-bottom: 12px; font-size: 0.9rem;
+    }}
+    .info-label {{ color: #94a3b8; }}
+    .info-val {{ font-weight: 600; color: #f1f5f9; }}
+    .status-badge {{
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 0.8rem; font-weight: 700;
+      background: {status_color}22; color: {status_color};
+    }}
+    .btn-update {{
+      display: block; width: 100%;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: white; font-weight: 700; font-size: 1rem;
+      padding: 14px 24px; border-radius: 12px; border: none;
+      cursor: pointer; text-decoration: none; margin: 28px 0 12px;
+      transition: opacity 0.2s;
+    }}
+    .btn-update:hover {{ opacity: 0.85; }}
+    .btn-web {{
+      display: block; color: #6366f1; font-size: 0.85rem;
+      text-decoration: underline; margin-bottom: 20px;
+    }}
+    .steps {{
+      background: #2a2a3e; border-radius: 10px; padding: 14px 18px;
+      margin: 16px 0; text-align: left; font-size: 0.85rem; color: #cbd5e1;
+    }}
+    .steps b {{ color: #f1f5f9; }}
+    .steps ol {{ margin-top: 8px; margin-left: 18px; line-height: 1.8; }}
+    .url-box {{
+      background: #111827; border: 1px solid #374151; border-radius: 8px;
+      padding: 10px 14px; font-family: monospace; font-size: 0.75rem;
+      color: #94a3b8; word-break: break-all; text-align: left; margin-top: 16px;
+    }}
+    .btn-copy {{
+      margin-top: 10px; width: 100%; padding: 10px;
+      background: #1e293b; border: 1px solid #374151; color: #94a3b8;
+      border-radius: 8px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s;
+    }}
+    .btn-copy:hover {{ background: #334155; color: #f1f5f9; }}
+    .hint {{ color: #64748b; font-size: 0.78rem; margin-top: 6px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🎬</div>
+    <h1>Telegram Stremio Addon</h1>
+    <p class="sub-title">Click the button below to install or update your addon in Stremio.</p>
+
+    <div class="info-row">
+      <span class="info-label">User</span>
+      <span class="info-val">{user_name}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Status</span>
+      <span class="status-badge">{status_text}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Expires</span>
+      <span class="info-val">{expiry_str}</span>
+    </div>
+
+    <a href="{web_install_url}" class="btn-update" target="_blank">
+      ⚡ Install / Update in Stremio
+    </a>
+
+    <div class="steps">
+      <b>Or install manually:</b>
+      <ol>
+        <li>Open Stremio → <b>Add-ons</b> tab</li>
+        <li>Click the <b>🔍 Search / URL</b> icon</li>
+        <li>Paste the URL below and press Enter</li>
+      </ol>
+    </div>
+
+    <div class="url-box" id="murl">{manifest_url}</div>
+    <button onclick="copyUrl()" class="btn-copy">📋 Copy URL</button>
+    <script>
+      function copyUrl() {{
+        navigator.clipboard.writeText('{manifest_url}').then(() => {{
+          const b = document.querySelector('.btn-copy');
+          b.textContent = '✅ Copied!';
+          setTimeout(() => b.textContent = '📋 Copy URL', 2000);
+        }});
+      }}
+    </script>
+  </div>
+</body>
+</html>"""
+    return HTMLResponse(html)
 
 
 
@@ -310,6 +502,18 @@ async def get_streams(
     token_data: dict = Depends(verify_token)
 ):
 
+    if token_data.get("subscription_expired"):
+        from Backend.config import Telegram as _TG
+        return {
+            "streams": [
+                {
+                    "name": "🚫 Subscription Expired",
+                    "title": "Your subscription has expired.\nRenew via the bot to continue watching.",
+                    "url": _TG.SUBSCRIPTION_URL
+                }
+            ]
+        }
+
     if token_data.get("limit_exceeded"):
         limit_type = token_data["limit_exceeded"]
 
@@ -368,4 +572,17 @@ async def get_streams(
         key=lambda s: get_resolution_priority(s.get("name", "")),
         reverse=True
     )
+
+    # Deduplicate stream names — Stremio collapses streams with identical names,
+    # so when two files share the same caption we append (1), (2) ... to each duplicate.
+    name_count: dict = {}
+    for s in streams:
+        name_count[s["name"]] = name_count.get(s["name"], 0) + 1
+
+    seen: dict = {}
+    for s in streams:
+        if name_count[s["name"]] > 1:
+            seen[s["name"]] = seen.get(s["name"], 0) + 1
+            s["name"] = f"{s['name']} ({seen[s['name']]})"
+
     return {"streams": streams}

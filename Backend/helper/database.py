@@ -78,6 +78,217 @@ class Database:
             upsert=True
         )
 
+    # -------------------------------
+    # User Subscription Management
+    # -------------------------------
+    async def get_user(self, user_id: int) -> Optional[dict]:
+        return await self.dbs["tracking"]["users"].find_one({"_id": user_id})
+
+    async def update_user_interaction(self, user_id: int, first_name: str, username: str):
+        await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {"$set": {"first_name": first_name, "username": username, "last_interaction": datetime.utcnow()}},
+            upsert=True
+        )
+
+    async def set_pending_payment(self, user_id: int, plan_duration: int, msg_id: int, price=0, admin_messages: list = None):
+        update_data = {
+            "pending_payment": {
+                "duration": plan_duration,
+                "price": price,
+                "msg_id": msg_id,
+                "date": datetime.utcnow(),
+            }
+        }
+        if admin_messages is not None:
+            update_data["pending_payment"]["admin_messages"] = admin_messages
+        await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {"$set": update_data},
+            upsert=True
+        )
+
+    async def approve_payment(self, user_id: int) -> Optional[dict]:
+        user = await self.get_user(user_id)
+        if not user or "pending_payment" not in user:
+            return None
+
+        duration = user["pending_payment"]["duration"]
+        
+        # Calculate new expiry
+        current_expiry = user.get("subscription_expiry")
+        now = datetime.utcnow()
+        if current_expiry and current_expiry > now:
+            from datetime import timedelta
+            new_expiry = current_expiry + timedelta(days=duration)
+        else:
+            from datetime import timedelta
+            new_expiry = now + timedelta(days=duration)
+
+        await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {
+                "$set": {"subscription_expiry": new_expiry, "subscription_status": "active"},
+                "$unset": {"pending_payment": ""}
+            }
+        )
+        return await self.get_user(user_id)
+
+    async def reject_payment(self, user_id: int) -> bool:
+        result = await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {"$unset": {"pending_payment": ""}}
+        )
+        return result.modified_count > 0
+
+    async def get_expired_users(self) -> List[dict]:
+        cursor = self.dbs["tracking"]["users"].find({
+            "subscription_expiry": {"$lt": datetime.utcnow()},
+            "subscription_status": "active"
+        })
+        return await cursor.to_list(None)
+
+    async def mark_user_expired(self, user_id: int):
+        await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {"$set": {"subscription_status": "expired"}}
+        )
+
+    async def get_expiring_users(self, hours: int = 24) -> List[dict]:
+        from datetime import timedelta
+        now = datetime.utcnow()
+        target_time = now + timedelta(hours=hours)
+        cursor = self.dbs["tracking"]["users"].find({
+            "subscription_expiry": {"$gt": now, "$lte": target_time},
+            "reminder_sent": {"$ne": True},
+            "subscription_status": "active"
+        })
+        return await cursor.to_list(None)
+        
+    async def mark_reminder_sent(self, user_id: int):
+         await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {"$set": {"reminder_sent": True}}
+        )
+
+    # -------------------------------
+    # Admin Subscription Management
+    # -------------------------------
+    async def get_subscription_plans(self) -> List[dict]:
+        cursor = self.dbs["tracking"]["sub_plans"].find().sort("days", ASCENDING)
+        plans = await cursor.to_list(None)
+        return [convert_objectid_to_str(plan) for plan in plans]
+
+    async def add_subscription_plan(self, days: int, price: float) -> Optional[str]:
+        result = await self.dbs["tracking"]["sub_plans"].insert_one({
+            "days": days,
+            "price": price,
+            "created_at": datetime.utcnow()
+        })
+        return str(result.inserted_id)
+
+    async def update_subscription_plan(self, plan_id: str, days: int, price: float) -> bool:
+        try:
+            result = await self.dbs["tracking"]["sub_plans"].update_one(
+                {"_id": ObjectId(plan_id)},
+                {"$set": {"days": days, "price": price, "updated_at": datetime.utcnow()}}
+            )
+            return result.modified_count > 0
+        except Exception:
+            return False
+
+    async def delete_subscription_plan(self, plan_id: str) -> bool:
+        try:
+            result = await self.dbs["tracking"]["sub_plans"].delete_one({"_id": ObjectId(plan_id)})
+            return result.deleted_count > 0
+        except Exception:
+            return False
+
+    async def get_all_subscribers(self) -> List[dict]:
+        cursor = self.dbs["tracking"]["users"].find({
+            "subscription_status": {"$in": ["active", "expired"]}
+        }).sort("subscription_expiry", DESCENDING)
+        users = await cursor.to_list(None)
+        return [convert_objectid_to_str(u) for u in users]
+
+    async def manage_subscriber(self, user_id: int, action: str, days: int = 0) -> bool:
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+            
+        now = datetime.utcnow()
+        if action == "extend" or action == "reduce":
+            from datetime import timedelta
+            current_expiry = user.get("subscription_expiry")
+            
+            if action == "extend":
+                if current_expiry and current_expiry > now:
+                    new_expiry = current_expiry + timedelta(days=days)
+                else:
+                    new_expiry = now + timedelta(days=days)
+            else: # reduce
+                if current_expiry:
+                    new_expiry = current_expiry - timedelta(days=days)
+                    if new_expiry < now:
+                        new_expiry = now # Just expire them
+                else:
+                    new_expiry = now # Already expired or none
+            
+            status = "active" if new_expiry > now else "expired"
+            
+            result = await self.dbs["tracking"]["users"].update_one(
+                {"_id": user_id},
+                {"$set": {"subscription_expiry": new_expiry, "subscription_status": status}}
+            )
+            return result.modified_count > 0
+            
+        elif action == "delete":
+            result = await self.dbs["tracking"]["users"].update_one(
+                {"_id": user_id},
+                {"$unset": {"subscription_expiry": "", "subscription_status": ""}}
+            )
+            return result.modified_count > 0
+            
+        return False
+
+    async def assign_subscription(self, user_id: int, days: int) -> dict:
+        """Upsert a subscription for any user_id, creating a record if it doesn't exist."""
+        from datetime import timedelta
+        now = datetime.utcnow()
+
+        user = await self.get_user(user_id)
+        if user:
+            current_expiry = user.get("subscription_expiry")
+            if current_expiry and current_expiry > now:
+                new_expiry = current_expiry + timedelta(days=days)
+            else:
+                new_expiry = now + timedelta(days=days)
+        else:
+            new_expiry = now + timedelta(days=days)
+
+        await self.dbs["tracking"]["users"].update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "subscription_expiry": new_expiry,
+                    "subscription_status": "active",
+                },
+                "$setOnInsert": {
+                    "_id": user_id,
+                    "first_name": f"User {user_id}",
+                    "username": None,
+                    "created_at": now,
+                }
+            },
+            upsert=True
+        )
+        return {
+            "user_id": user_id,
+            "subscription_expiry": new_expiry.isoformat(),
+            "subscription_status": "active",
+            "days_assigned": days,
+        }
+
 
     # -------------------------------
     # Helper Methods for Repeated Logic
@@ -198,10 +409,25 @@ class Database:
                     quality=metadata_info['quality'],
                     id=metadata_info['encoded_string'],
                     name=name,
-                    size=size
+                    size=size,
+                    part_number=metadata_info.get('part_number', 0)
                 )]
             )
-            return await self.update_movie(media)
+            res = await self.update_movie(media)
+            if res and Telegram.NOTIFY_ENABLED and Telegram.NOTIFY_CHANNEL_ID:
+                try:
+                    from Backend.pyrofork.bot import StreamBot
+                    from Backend.helper.notify_bot import notify_instant_added
+                    create_task(notify_instant_added(StreamBot, metadata_info, size=size, name=name))
+                except Exception as e:
+                    LOGGER.error(f"Failed to schedule instant notify (movie): {e}")
+            if res and Telegram.AUTO_SYNC_LIBRARY and Telegram.LIBRARY_PATH and Telegram.LIBRARY_TOKEN:
+                try:
+                    from Backend.helper.library_sync import schedule_sync
+                    create_task(schedule_sync(trigger="insert_movie"))
+                except Exception as e:
+                    LOGGER.error(f"Failed to schedule library sync (movie): {e}")
+            return res
         else:
             tv_show = TVShowSchema(
                 tmdb_id=metadata_info['tmdb_id'],
@@ -235,7 +461,21 @@ class Database:
                     )]
                 )]
             )
-            return await self.update_tv_show(tv_show)
+            res = await self.update_tv_show(tv_show)
+            if res and Telegram.NOTIFY_ENABLED and Telegram.NOTIFY_CHANNEL_ID:
+                try:
+                    from Backend.pyrofork.bot import StreamBot
+                    from Backend.helper.notify_bot import notify_instant_added
+                    create_task(notify_instant_added(StreamBot, metadata_info, size=size, name=name))
+                except Exception as e:
+                    LOGGER.error(f"Failed to schedule instant notify (tv): {e}")
+            if res and Telegram.AUTO_SYNC_LIBRARY and Telegram.LIBRARY_PATH and Telegram.LIBRARY_TOKEN:
+                try:
+                    from Backend.helper.library_sync import schedule_sync
+                    create_task(schedule_sync(trigger="insert_tv"))
+                except Exception as e:
+                    LOGGER.error(f"Failed to schedule library sync (tv): {e}")
+            return res
 
     async def update_movie(self, movie_data: MovieSchema) -> Optional[ObjectId]:
         try:
@@ -752,6 +992,33 @@ class Database:
         LOGGER.info(f"No document found with tmdb_id {tmdb_id}.")
         return False
 
+    async def get_title_by_stream_id(self, stream_id_hash: str) -> Optional[str]:
+        """Look up the original media title across all storage DBs using the telegram file ID hash.
+        For TV shows, it includes the Season and Episode number in the title."""
+        for i in range(1, self.current_db_index + 1):
+            db = self.dbs[f"storage_{i}"]
+            
+            # Check Movies
+            movie = await db["movie"].find_one({"telegram.id": stream_id_hash})
+            if movie and "telegram" in movie:
+                for t in movie["telegram"]:
+                    if t.get("id") == stream_id_hash:
+                        return movie.get("title")
+
+            # Check TV Shows
+            tv = await db["tv"].find_one({"seasons.episodes.telegram.id": stream_id_hash})
+            if tv and "seasons" in tv:
+                title = tv.get("title", "Unknown Series")
+                for season in tv.get("seasons", []):
+                    for episode in season.get("episodes", []):
+                        for t in episode.get("telegram", []):
+                            if t.get("id") == stream_id_hash:
+                                s_num = season.get("season_number", 0)
+                                e_num = episode.get("episode_number", 0)
+                                return f"{title} S{s_num:02d}E{e_num:02d}"
+
+        return None
+
     async def delete_movie_quality(self, tmdb_id: int, db_index: int, id: str) -> bool:
         db_key = f"storage_{db_index}"
         movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
@@ -911,13 +1178,20 @@ class Database:
     # API Token Methods
     # -------------------------------
 
-    async def add_api_token(self, name: str, daily_limit_gb: float = None, monthly_limit_gb: float = None) -> dict:
+    async def add_api_token(self, name: str, daily_limit_gb: float = None, monthly_limit_gb: float = None, user_id: int = None) -> dict:
+        # If a user_id is provided, return existing token if already created
+        if user_id:
+            existing = await self.dbs["tracking"]["api_tokens"].find_one({"user_id": user_id})
+            if existing:
+                return convert_objectid_to_str(existing)
+
         alphabet = string.ascii_letters + string.digits
         token = ''.join(secrets.choice(alphabet) for _ in range(32))
         
         token_doc = {
             "name": name,
             "token": token,
+            "user_id": user_id,
             "created_at": datetime.utcnow(),
             "limits": {
                 "daily_limit_gb": daily_limit_gb if daily_limit_gb else 0,
@@ -945,6 +1219,14 @@ class Database:
     async def revoke_api_token(self, token: str) -> bool:
         result = await self.dbs["tracking"]["api_tokens"].delete_one({"token": token})
         return result.deleted_count > 0
+
+    async def link_token_user(self, token: str, user_id: int) -> bool:
+        """Link an existing token to a Telegram user_id."""
+        result = await self.dbs["tracking"]["api_tokens"].update_one(
+            {"token": token},
+            {"$set": {"user_id": user_id}}
+        )
+        return result.modified_count > 0
 
     async def update_token_usage(self, token: str, bytes_delta: int):
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -990,3 +1272,190 @@ class Database:
             }}
         )
         return result.modified_count > 0
+
+    # -------------------------------
+    # Admin / Link Checker Methods
+    # -------------------------------
+    async def flag_dead_link(self, media_type: str, tmdb_id: int, db_index: int, quality_id: str) -> bool:
+        """
+        Flags a specific telegram quality entry as 'is_dead: True'.
+        """
+        db_key = f"storage_{db_index}"
+        
+        if media_type == "movie":
+            # Direct update in the telegram array for movies
+            result = await self.dbs[db_key]["movie"].update_one(
+                {"tmdb_id": tmdb_id, "telegram.id": quality_id},
+                {"$set": {"telegram.$.is_dead": True, "updated_on": datetime.utcnow()}}
+            )
+            return result.modified_count > 0
+            
+        elif media_type == "tv":
+            # Nested update for TV (arrayFilters needed since we don't know the exact indices)
+            # Find the TV show docs
+            tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+            if not tv or "seasons" not in tv:
+                return False
+                
+            found = False
+            for s_idx, season in enumerate(tv["seasons"]):
+                for e_idx, episode in enumerate(season.get("episodes", [])):
+                    for q_idx, quality in enumerate(episode.get("telegram", [])):
+                        if quality.get("id") == quality_id:
+                            tv["seasons"][s_idx]["episodes"][e_idx]["telegram"][q_idx]["is_dead"] = True
+                            found = True
+                            break
+                    if found: break
+                if found: break
+                
+            if found:
+                tv["updated_on"] = datetime.utcnow()
+                result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
+                return result.modified_count > 0
+                
+        return False
+
+    async def get_all_dead_links(self) -> List[dict]:
+        """
+        Scans all active storage databases for both movies and TV shows, returning a
+        flattened list of dead links with their metadata for the Admin UI.
+        """
+        dead_links = []
+        
+        for i in range(1, self.current_db_index + 1):
+            db_key = f"storage_{i}"
+            db = self.dbs[db_key]
+            
+            # --- Scan Movies ---
+            # Match any movie where at least one telegram entry has is_dead=True
+            movie_cursor = db["movie"].find({"telegram.is_dead": True})
+            async for movie in movie_cursor:
+                for quality in movie.get("telegram", []):
+                    if quality.get("is_dead"):
+                        dead_links.append({
+                            "type": "movie",
+                            "tmdb_id": movie.get("tmdb_id"),
+                            "db_index": movie.get("db_index", i),
+                            "title": movie.get("title"),
+                            "year": movie.get("year"),
+                            "poster": movie.get("poster"),
+                            "quality_id": quality.get("id"),
+                            "quality": quality.get("quality"),
+                            "size": quality.get("size"),
+                            "date_added": quality.get("date_added")
+                        })
+                        
+            # --- Scan TV Shows ---
+            # Match any TV where seasons.episodes.telegram.is_dead=True
+            tv_cursor = db["tv"].find({"seasons.episodes.telegram.is_dead": True})
+            async for tv in tv_cursor:
+                title = tv.get("title")
+                year = tv.get("year")
+                poster = tv.get("poster")
+                for season in tv.get("seasons", []):
+                    s_num = season.get("season_number")
+                    for ep in season.get("episodes", []):
+                        e_num = ep.get("episode_number")
+                        for quality in ep.get("telegram", []):
+                            if quality.get("is_dead"):
+                                dead_links.append({
+                                    "type": "tv",
+                                    "tmdb_id": tv.get("tmdb_id"),
+                                    "db_index": tv.get("db_index", i),
+                                    "title": f"{title} (S{s_num:02d}E{e_num:02d})",
+                                    "year": year,
+                                    "poster": poster,
+                                    "season": s_num,
+                                    "episode": e_num,
+                                    "quality_id": quality.get("id"),
+                                    "quality": quality.get("quality"),
+                                    "size": quality.get("size"),
+                                    "date_added": quality.get("date_added")
+                                })
+                                
+        return dead_links
+
+    # -------------------------------
+    # Stream Analytics
+    # -------------------------------
+
+    async def log_stream_stats(self, stats: dict) -> None:
+        """Persist a finished-stream record to the tracking DB for analytics."""
+        try:
+            record = {
+                "stream_id":   stats.get("stream_id"),
+                "msg_id":      stats.get("msg_id"),
+                "chat_id":     stats.get("chat_id"),
+                "dc_id":       stats.get("dc_id"),
+                "title":       stats.get("meta", {}).get("title"),  # Added title
+                "client_index": stats.get("client_index"),
+                "total_bytes": stats.get("total_bytes", 0),
+                "duration_sec": round(stats.get("duration", 0.0), 2),
+                "avg_mbps":    round(stats.get("avg_mbps", 0.0), 3),
+                "peak_mbps":   round(stats.get("peak_mbps", 0.0), 3),
+                "status":      stats.get("status", "finished"),
+                "parallelism": stats.get("parallelism"),
+                "chunk_size":  stats.get("chunk_size"),
+                "logged_at":   datetime.utcnow(),
+            }
+            await self.dbs["tracking"]["stream_analytics"].insert_one(record)
+        except Exception as e:
+            LOGGER.warning(f"Stream analytics log failed: {e}")
+
+    async def get_stream_analytics(self, limit: int = 200) -> dict:
+        """Return summary stats + recent stream records from the tracking DB."""
+        try:
+            col = self.dbs["tracking"]["stream_analytics"]
+
+            # Aggregate totals
+            pipeline = [
+                {"$group": {
+                    "_id": None,
+                    "total_streams":     {"$sum": 1},
+                    "total_bytes":       {"$sum": "$total_bytes"},
+                    "avg_speed":         {"$avg": "$avg_mbps"},
+                    "peak_speed":        {"$max": "$peak_mbps"},
+                    "avg_duration":      {"$avg": "$duration_sec"},
+                }},
+            ]
+            agg = await col.aggregate(pipeline).to_list(1)
+            summary = agg[0] if agg else {}
+            summary.pop("_id", None)
+
+            # Per-client breakdown
+            per_client_pipeline = [
+                {"$group": {
+                    "_id":          "$client_index",
+                    "streams":      {"$sum": 1},
+                    "avg_mbps":     {"$avg": "$avg_mbps"},
+                    "peak_mbps":    {"$max": "$peak_mbps"},
+                    "total_bytes":  {"$sum": "$total_bytes"},
+                }},
+                {"$sort": {"_id": 1}},
+            ]
+            per_client = await col.aggregate(per_client_pipeline).to_list(None)
+            for row in per_client:
+                row["client_index"] = row.pop("_id")
+                row["avg_mbps"]     = round(row.get("avg_mbps", 0), 3)
+                row["peak_mbps"]    = round(row.get("peak_mbps", 0), 3)
+
+            # Recent records (newest first)
+            recent_cursor = col.find(
+                {},
+                {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1,
+                 "total_bytes": 1, "duration_sec": 1, "avg_mbps": 1,
+                 "peak_mbps": 1, "status": 1, "logged_at": 1, "title": 1}
+            ).sort("logged_at", DESCENDING).limit(limit)
+            recent = await recent_cursor.to_list(None)
+            for r in recent:
+                if "logged_at" in r:
+                    r["logged_at"] = r["logged_at"].isoformat()
+
+            return {
+                "summary":    summary,
+                "per_client": per_client,
+                "recent":     recent,
+            }
+        except Exception as e:
+            LOGGER.error(f"get_stream_analytics error: {e}")
+            return {"summary": {}, "per_client": [], "recent": []}

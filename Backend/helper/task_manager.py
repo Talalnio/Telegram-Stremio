@@ -1,7 +1,7 @@
 from asyncio import sleep
 from pyrogram.errors import FloodWait
 from Backend.logger import LOGGER
-from Backend.pyrofork.bot import Helper
+from Backend.pyrofork.bot import Helper, StreamBot
 
 async def edit_message(chat_id: int, msg_id: int, new_caption: str):
     try:
@@ -19,10 +19,10 @@ async def edit_message(chat_id: int, msg_id: int, new_caption: str):
 
 async def delete_message(chat_id: int, msg_id: int):
     try:
-        await Helper.delete_messages(
-            chat_id=chat_id,
-            message_ids=msg_id
-        )
+        try:
+            await Helper.delete_messages(chat_id=chat_id, message_ids=msg_id)
+        except Exception:
+            await StreamBot.delete_messages(chat_id=chat_id, message_ids=msg_id)
         await sleep(2)
         LOGGER.info(f"Deleted message {msg_id} in {chat_id}")
     except FloodWait as e:

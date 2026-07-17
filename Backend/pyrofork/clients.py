@@ -1,5 +1,6 @@
-from asyncio import gather, create_task
+from asyncio import gather, create_task, sleep, Semaphore
 from pyrogram import Client
+from pyrogram.errors import FloodWait
 from Backend.logger import LOGGER
 from Backend.config import Telegram
 from Backend.pyrofork.bot import multi_clients, work_loads, StreamBot, client_dc_map
@@ -19,18 +20,32 @@ class TokenParser:
         }
         return tokens
 
+_start_sem = Semaphore(max(1, Telegram.MULTI_CLIENT_START_MAX_CONCURRENCY))
+
+
+async def _delayed_start(client_id: int, token: str, wait_seconds: int):
+    await sleep(max(1, int(wait_seconds)))
+    result = await start_client(client_id, token)
+    if result:
+        cid, client = result
+        multi_clients[cid] = client
+        if cid not in work_loads:
+            work_loads[cid] = 0
+
+
 async def start_client(client_id, token):
     try:
-        LOGGER.info(f"Starting - Bot Client {client_id}")
-        client = await Client(
-            name=str(client_id),
-            api_id=Telegram.API_ID,
-            api_hash=Telegram.API_HASH,
-            bot_token=token,
-            sleep_threshold=100,
-            no_updates=True,
-            in_memory=True
-        ).start()
+        async with _start_sem:
+            LOGGER.info(f"Starting - Bot Client {client_id}")
+            client = await Client(
+                name=str(client_id),
+                api_id=Telegram.API_ID,
+                api_hash=Telegram.API_HASH,
+                bot_token=token,
+                sleep_threshold=100,
+                no_updates=True,
+                in_memory=True
+            ).start()
         
         try:
             client_dc = await client.storage.dc_id()
@@ -42,6 +57,17 @@ async def start_client(client_id, token):
         
         work_loads[client_id] = 0
         return client_id, client
+    except FloodWait as e:
+        wait_seconds = int(getattr(e, "value", 0) or 0)
+        LOGGER.warning(f"FloodWait while starting Client {client_id}: {wait_seconds}s required")
+        if wait_seconds <= 60:
+            await sleep(max(1, wait_seconds))
+            return await start_client(client_id, token)
+
+        if wait_seconds <= Telegram.MULTI_CLIENT_FLOODWAIT_MAX_SCHEDULE:
+            create_task(_delayed_start(client_id, token, wait_seconds))
+            LOGGER.warning(f"Scheduled retry for Client {client_id} in {wait_seconds}s")
+        return None
     except Exception as e:
         LOGGER.error(f"Failed to start Client - {client_id} Error: {e}", exc_info=True)
         return None
@@ -62,10 +88,18 @@ async def initialize_clients():
         LOGGER.info("No additional Bot Clients found, Using default client")
         return
 
-    tasks = [create_task(start_client(i, token)) for i, token in all_tokens.items()]
+    gap = max(0, Telegram.MULTI_CLIENT_START_GAP_SECONDS)
+    tasks = []
+    for i, token in all_tokens.items():
+        tasks.append(create_task(start_client(i, token)))
+        if gap:
+            await sleep(gap)
     clients = await gather(*tasks)
-    clients = {client_id: client for client_id, client in clients if client}
-    multi_clients.update(clients)
+    ok = [c for c in clients if c]
+    for cid, client in ok:
+        multi_clients[cid] = client
+        if cid not in work_loads:
+            work_loads[cid] = 0
 
     if len(multi_clients) != 1:
         LOGGER.info(f"Multi-Client Mode Enabled with {len(multi_clients)} clients")

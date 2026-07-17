@@ -225,3 +225,45 @@ async def stremio_guide_page(request: Request):
         "current_theme": theme_name,
         "is_authenticated": is_authenticated(request)
     })
+
+
+async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)):
+    theme_name = request.session.get("theme", "purple_gradient")
+    theme = get_theme(theme_name)
+    current_user = get_current_user(request)
+
+    return templates.TemplateResponse("admin_dashboard.html", {
+        "request": request,
+        "theme": theme,
+        "themes": get_all_themes(),
+        "current_theme": theme_name,
+        "current_user": current_user,
+    })
+
+
+async def admin_subscriptions_page(request: Request, _: bool = Depends(require_auth)):
+    theme_name = request.session.get("theme", "purple_gradient")
+    theme = get_theme(theme_name)
+    current_user = get_current_user(request)
+
+    return templates.TemplateResponse("subscriptions_manage.html", {
+        "request": request,
+        "theme": theme,
+        "themes": get_all_themes(),
+        "current_theme": theme_name,
+        "current_user": current_user,
+    })
+
+
+async def admin_access_page(request: Request, _: bool = Depends(require_auth)):
+    theme_name = request.session.get("theme", "purple_gradient")
+    theme = get_theme(theme_name)
+    current_user = get_current_user(request)
+
+    return templates.TemplateResponse("access_manage.html", {
+        "request": request,
+        "theme": theme,
+        "themes": get_all_themes(),
+        "current_theme": theme_name,
+        "current_user": current_user,
+    })
