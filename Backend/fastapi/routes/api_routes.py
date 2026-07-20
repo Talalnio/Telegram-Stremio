@@ -1601,7 +1601,7 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "announce_new_content", "delete_on_metadata_fail"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "fanart_enabled", "fanart_shuffle"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
@@ -1617,6 +1617,24 @@ async def update_settings_api(payload: dict) -> dict:
         payload["better_poster"] = str(payload["better_poster"] or "").strip()
         if payload["better_poster"] and "{imdb_id}" not in payload["better_poster"]:
             raise HTTPException(status_code=400, detail="wrong betterposter url")
+
+    if "rpdb_api_key" in payload:
+        payload["rpdb_api_key"] = str(payload["rpdb_api_key"] or "").strip()
+
+    if "fanart_api_key" in payload:
+        payload["fanart_api_key"] = str(payload["fanart_api_key"] or "").strip()
+
+    if "fanart_shuffle_interval" in payload:
+        try:
+            payload["fanart_shuffle_interval"] = max(0, int(payload["fanart_shuffle_interval"]))
+        except (ValueError, TypeError):
+            payload["fanart_shuffle_interval"] = 5
+
+    if len([k for k in ("better_poster_enabled", "rpdb_enabled", "fanart_enabled") if payload.get(k)]) > 1:
+        raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
+
+    if payload.get("fanart_enabled") and not str(payload.get("fanart_api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="Fanart.tv API key is required")
 
     if "extra_databases" in payload:
         for uri in payload["extra_databases"]:
@@ -1723,7 +1741,8 @@ async def update_settings_api(payload: dict) -> dict:
     #----- Strip whitespace from string fields
     for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
                 "admin_username", "admin_password", "session_secret", "http_proxy_url",
-                "payment_instructions", "payment_qr_url", "announcement_channel", "skip_channel"):
+                "mediaflow_password", "payment_instructions", "payment_qr_url",
+                "announcement_channel", "skip_channel"):
         if key in payload and isinstance(payload[key], str):
             payload[key] = payload[key].strip()
 

@@ -348,12 +348,6 @@
                     value="{{ settings.base_url }}"
                     placeholder="https://your-domain.com">
             </div>
-            <div>
-                <label class="s-label" for="better_poster">Better Poster URL</label>
-                <input type="text" id="better_poster" class="s-input"
-                    value="{{ settings.better_poster }}" autocomplete="off" spellcheck="false"
-                    placeholder="https://btttr.cc/poster-a/imdb/poster-default/{imdb_id}.jpg">
-            </div>
         </div>
         <hr class="divider">
         <div class="grid-2">
@@ -368,6 +362,92 @@
                 <input type="text" id="upstream_branch" class="s-input"
                     value="{{ settings.upstream_branch }}"
                     placeholder="master">
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Poster Provider ─────────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-solid fa-image"></i> Poster Provider</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            Replace catalog posters with textless artwork. Only one provider can be active at a time.
+        </p>
+
+        <label class="toggle-wrap" style="margin-bottom:0.75rem">
+            <input type="checkbox" class="toggle-input" id="better_poster_enabled"
+                {% if settings.better_poster_enabled %}checked{% endif %}
+                onchange="togglePosterProvider('better')">
+            <span class="toggle-track"></span>
+            <span class="toggle-label">
+                <strong>BetterPoster</strong>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                    Uses btttr.cc. Leave the URL empty for the default variant.
+                </span>
+            </span>
+        </label>
+        <div id="better-poster-wrap" style="margin-bottom:1.25rem;{% if not settings.better_poster_enabled %}display:none{% endif %}">
+            <label class="s-label" for="better_poster">BetterPoster URL <span style="font-weight:400;text-transform:none">(optional)</span></label>
+            <input type="text" id="better_poster" class="s-input"
+                value="{{ settings.better_poster }}" autocomplete="off" spellcheck="false"
+                placeholder="https://btttr.cc/poster/imdb/poster-default/{imdb_id}.jpg">
+        </div>
+
+        <label class="toggle-wrap" style="margin-bottom:0.75rem">
+            <input type="checkbox" class="toggle-input" id="rpdb_enabled"
+                {% if settings.rpdb_enabled %}checked{% endif %}
+                onchange="togglePosterProvider('rpdb')">
+            <span class="toggle-track"></span>
+            <span class="toggle-label">
+                <strong>RPDB</strong>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                    Uses ratingposterdb.com. Leave the API key empty to use the free tier.
+                </span>
+            </span>
+        </label>
+        <div id="rpdb-wrap" style="margin-bottom:1.25rem;{% if not settings.rpdb_enabled %}display:none{% endif %}">
+            <label class="s-label" for="rpdb_api_key">RPDB API Key <span style="font-weight:400;text-transform:none">(optional)</span></label>
+            <input type="text" id="rpdb_api_key" class="s-input"
+                value="{{ settings.rpdb_api_key }}" autocomplete="off" spellcheck="false"
+                placeholder="Leave empty for free tier (t0-free-rpdb)">
+        </div>
+
+        <label class="toggle-wrap" style="margin-bottom:0.75rem">
+            <input type="checkbox" class="toggle-input" id="fanart_enabled"
+                {% if settings.fanart_enabled %}checked{% endif %}
+                onchange="togglePosterProvider('fanart')">
+            <span class="toggle-track"></span>
+            <span class="toggle-label">
+                <strong>Fanart.tv</strong>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                    Poster, logo and backdrop from fanart.tv. An API key is required.
+                </span>
+            </span>
+        </label>
+        <div id="fanart-wrap" style="{% if not settings.fanart_enabled %}display:none{% endif %}">
+            <label class="s-label" for="fanart_api_key">Fanart.tv API Key</label>
+            <input type="text" id="fanart_api_key" class="s-input"
+                value="{{ settings.fanart_api_key }}" autocomplete="off" spellcheck="false"
+                placeholder="Your fanart.tv project API key">
+            <label class="toggle-wrap" style="margin-top:0.85rem">
+                <input type="checkbox" class="toggle-input" id="fanart_shuffle"
+                    {% if settings.fanart_shuffle %}checked{% endif %}
+                    onchange="toggleFanartShuffle()">
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Shuffle artwork</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Pick a random English artwork instead of the most liked one. Missing types fall back to the stored artwork.
+                    </span>
+                </span>
+            </label>
+            <div id="fanart-shuffle-wrap" style="margin-top:0.85rem;{% if not settings.fanart_shuffle %}display:none{% endif %}">
+                <label class="s-label" for="fanart_shuffle_interval">Shuffle interval (minutes)</label>
+                <input type="number" id="fanart_shuffle_interval" class="s-input" min="0" step="1"
+                    value="{{ settings.fanart_shuffle_interval }}"
+                    placeholder="5">
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block;margin-top:0.35rem">
+                    How often the artwork changes. Use 0 for a fresh random pick on every load.
+                </span>
             </div>
         </div>
     </div>
@@ -635,8 +715,40 @@
             <label class="s-label" for="http_proxy_url">HTTP Proxy URL</label>
             <input type="url" id="http_proxy_url" class="s-input"
                 value="{{ settings.http_proxy_url }}"
-                placeholder="http://user:pass@host:port or leave empty">
+                placeholder="http://user:pass@host:port or leave empty"
+                oninput="toggleMediaflowFields()">
         </div>
+
+        <div id="mediaflow-wrap" style="{% if not settings.http_proxy_url %}display:none{% endif %}">
+            <label class="toggle-wrap" style="margin-bottom:1rem">
+                <input type="checkbox" class="toggle-input" id="mediaflow_proxy"
+                    {% if settings.mediaflow_proxy %}checked{% endif %}
+                    onchange="toggleMediaflowFields()">
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>MediaFlow Proxy</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Wrap streams as <code>/proxy/stream?d=&lt;url&gt;&amp;api_password=&lt;pass&gt;</code>
+                    </span>
+                </span>
+            </label>
+            <div id="mediaflow-password-wrap"
+                 style="margin-bottom:1rem;{% if not settings.mediaflow_proxy %}display:none{% endif %}">
+                <label class="s-label" for="mediaflow_password">MediaFlow API Password</label>
+                <div style="position:relative">
+                    <input type="password" id="mediaflow_password" class="s-input"
+                        value="{{ settings.mediaflow_password }}"
+                        placeholder="api_password" style="padding-right:2.5rem"
+                        autocomplete="off" spellcheck="false">
+                    <button type="button" onclick="toggleMfPwdVisibility()"
+                        style="position:absolute;right:0.75rem;top:50%;transform:translateY(-50%);
+                               background:none;border:none;color:var(--text-sec);cursor:pointer">
+                        <i class="fa-solid fa-eye" id="mf-eye-icon"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <label class="toggle-wrap">
             <input type="checkbox" class="toggle-input" id="show_proxy_and_non_proxy_both"
                 {% if settings.show_proxy_and_non_proxy_both %}checked{% endif %}>
@@ -824,6 +936,28 @@ function toggleAnnouncementFields() {
     }
 }
 
+function toggleMediaflowFields() {
+    const hasProxy = document.getElementById('http_proxy_url').value.trim() !== '';
+    const wrap = document.getElementById('mediaflow-wrap');
+    const toggle = document.getElementById('mediaflow_proxy');
+    if (wrap) wrap.style.display = hasProxy ? '' : 'none';
+    if (!hasProxy && toggle) toggle.checked = false;
+    const pwdWrap = document.getElementById('mediaflow-password-wrap');
+    if (pwdWrap) pwdWrap.style.display = (hasProxy && toggle.checked) ? '' : 'none';
+}
+
+function toggleMfPwdVisibility() {
+    const input = document.getElementById('mediaflow_password');
+    const icon = document.getElementById('mf-eye-icon');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'fa-solid fa-eye-slash';
+    } else {
+        input.type = 'password';
+        icon.className = 'fa-solid fa-eye';
+    }
+}
+
 function toggleSkipDeleteField() {
     const hasChannel = document.getElementById('skip_channel').value.trim() !== '';
     const wrap = document.getElementById('delete_on_metadata_fail_wrap');
@@ -833,6 +967,25 @@ function toggleSkipDeleteField() {
     if (!hasChannel) {
         document.getElementById('delete_on_metadata_fail').checked = false;
     }
+}
+
+function togglePosterProvider(which) {
+    const els = {
+        better: document.getElementById('better_poster_enabled'),
+        rpdb: document.getElementById('rpdb_enabled'),
+        fanart: document.getElementById('fanart_enabled'),
+    };
+    if (which && els[which] && els[which].checked) {
+        for (const k in els) if (k !== which) els[k].checked = false;
+    }
+    document.getElementById('better-poster-wrap').style.display = els.better.checked ? '' : 'none';
+    document.getElementById('rpdb-wrap').style.display = els.rpdb.checked ? '' : 'none';
+    document.getElementById('fanart-wrap').style.display = els.fanart.checked ? '' : 'none';
+}
+
+function toggleFanartShuffle() {
+    const on = document.getElementById('fanart_shuffle').checked;
+    document.getElementById('fanart-shuffle-wrap').style.display = on ? '' : 'none';
 }
 
 /* ── Password visibility ──────────────────────────────────────────────── */
@@ -949,7 +1102,14 @@ async function saveSettings() {
         session_secret:                document.getElementById('session_secret').value,  // blank = keep
         tmdb_api:                      document.getElementById('tmdb_api').value.trim(),
         base_url:                      document.getElementById('base_url').value.trim(),
+        better_poster_enabled:         document.getElementById('better_poster_enabled').checked,
         better_poster:                 document.getElementById('better_poster').value.trim(),
+        rpdb_enabled:                  document.getElementById('rpdb_enabled').checked,
+        rpdb_api_key:                  document.getElementById('rpdb_api_key').value.trim(),
+        fanart_enabled:                document.getElementById('fanart_enabled').checked,
+        fanart_api_key:                document.getElementById('fanart_api_key').value.trim(),
+        fanart_shuffle:                document.getElementById('fanart_shuffle').checked,
+        fanart_shuffle_interval:       parseInt(document.getElementById('fanart_shuffle_interval').value, 10) || 0,
         upstream_repo:                 document.getElementById('upstream_repo').value.trim(),
         upstream_branch:               document.getElementById('upstream_branch').value.trim(),
         auth_channels:                 collectList('auth_channels'),
@@ -961,6 +1121,8 @@ async function saveSettings() {
         approver_ids:                  collectList('approver_ids').map(Number),
         http_proxy_url:                document.getElementById('http_proxy_url').value.trim(),
         show_proxy_and_non_proxy_both: document.getElementById('show_proxy_and_non_proxy_both').checked,
+        mediaflow_proxy:               document.getElementById('mediaflow_proxy').checked,
+        mediaflow_password:            document.getElementById('mediaflow_password').value,
         multi_tokens:                  collectList('multi_tokens'),
         extra_databases:               collectList('extra_databases'),
         global_search:                 document.getElementById('global_search').checked,
@@ -1085,11 +1247,23 @@ function renderSettings(s) {
     document.getElementById('admin_password').value = '';  // never re-fill password
     document.getElementById('tmdb_api').value = s.tmdb_api || '';
     document.getElementById('base_url').value = s.base_url || '';
+    document.getElementById('better_poster_enabled').checked = !!s.better_poster_enabled;
     document.getElementById('better_poster').value = s.better_poster || '';
+    document.getElementById('rpdb_enabled').checked = !!s.rpdb_enabled;
+    document.getElementById('rpdb_api_key').value = s.rpdb_api_key || '';
+    document.getElementById('fanart_enabled').checked = !!s.fanart_enabled;
+    document.getElementById('fanart_api_key').value = s.fanart_api_key || '';
+    document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
+    document.getElementById('fanart_shuffle_interval').value = (s.fanart_shuffle_interval ?? 5);
+    togglePosterProvider();
+    toggleFanartShuffle();
     document.getElementById('upstream_repo').value = s.upstream_repo || '';
     document.getElementById('upstream_branch').value = s.upstream_branch || '';
     document.getElementById('subscription_group_id').value = s.subscription_group_id || 0;
     document.getElementById('http_proxy_url').value = s.http_proxy_url || '';
+    document.getElementById('mediaflow_proxy').checked = !!s.mediaflow_proxy;
+    document.getElementById('mediaflow_password').value = s.mediaflow_password || '';
+    toggleMediaflowFields();
     document.getElementById('announcement_channel').value = s.announcement_channel || '';
     document.getElementById('skip_channel').value = s.skip_channel || '';
     toggleSkipDeleteField();
@@ -1270,6 +1444,7 @@ window.addEventListener('DOMContentLoaded', () => {
         showToast('The app restarted successfully and is back online.', 'success', 'Restart complete', 8000);
     }
     toggleDuplicateProtection();
+    toggleMediaflowFields();
     loadDbStats();
     loadLogs();
 });
