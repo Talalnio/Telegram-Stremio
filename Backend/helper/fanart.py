@@ -30,39 +30,61 @@ def _preview(url: str) -> str:
 
 
 def _medium(url: str) -> str:
-    return f"https://wsrv.nl/?url={quote(url, safe='')}&w=1280&output=jpg&q=80" if url else url
+    return f"https://wsrv.nl/?url={quote(url, safe='')}&w=1280&output=webp&q=80" if url else url
 
 
 _CACHE_TTL = 6 * 3600
+_ERROR_TTL = 300
+_CACHE_MAX = 4096
 _cache: dict = {}
 _tvdb_cache: dict = {}
+_inflight: dict = {}
 
 _client: Optional[httpx.AsyncClient] = None
 _client_lock = asyncio.Lock()
+_fetch_sem = asyncio.Semaphore(10)
 
 
 async def _get_client() -> httpx.AsyncClient:
     global _client
     async with _client_lock:
         if _client is None or _client.is_closed:
-            _client = httpx.AsyncClient(timeout=12.0, follow_redirects=True)
+            _client = httpx.AsyncClient(
+                timeout=httpx.Timeout(8.0, connect=4.0),
+                follow_redirects=True,
+            )
     return _client
 
 
-async def _fetch(url: str, params: dict) -> dict:
-    now = time.monotonic()
-    cached = _cache.get(url)
-    if cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
+async def _fetch_remote(url: str, params: dict) -> dict:
     try:
-        client = await _get_client()
-        resp = await client.get(url, params=params)
+        async with _fetch_sem:
+            client = await _get_client()
+            resp = await client.get(url, params=params)
         data = resp.json() if resp.status_code == 200 else {}
+        ttl = _CACHE_TTL if resp.status_code == 200 else _ERROR_TTL
     except Exception as e:
         LOGGER.warning(f"[FANART] fetch failed {url}: {e}")
-        return {}
-    _cache[url] = (now, data if isinstance(data, dict) else {})
-    return _cache[url][1]
+        data, ttl = {}, _ERROR_TTL
+    if not isinstance(data, dict):
+        data, ttl = {}, _ERROR_TTL
+    if len(_cache) >= _CACHE_MAX:
+        for k in sorted(_cache, key=lambda k: _cache[k][0])[: _CACHE_MAX // 10]:
+            _cache.pop(k, None)
+    _cache[url] = (time.monotonic(), data, ttl)
+    return data
+
+
+async def _fetch(url: str, params: dict) -> dict:
+    cached = _cache.get(url)
+    if cached and time.monotonic() - cached[0] < cached[2]:
+        return cached[1]
+    task = _inflight.get(url)
+    if task is None:
+        task = asyncio.create_task(_fetch_remote(url, params))
+        _inflight[url] = task
+        task.add_done_callback(lambda _t, _u=url: _inflight.pop(_u, None))
+    return await task
 
 
 async def _resolve_tvdb(tmdb_id) -> Optional[int]:
