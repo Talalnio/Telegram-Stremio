@@ -8,11 +8,13 @@ from Backend import StartTime, __version__, db
 from Backend.config import Telegram
 from Backend.fastapi.security.credentials import get_current_user, is_authenticated, require_auth, verify_credentials
 from Backend.fastapi.themes import DEFAULT_THEME, get_all_themes, get_theme
+from Backend.helper.analytics import get_activity_overview
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS
 from Backend.helper.metadata import resolve_cover_url
 from Backend.helper.pyro import get_readable_time
 from Backend.helper.settings_manager import SettingsManager
-from Backend.pyrofork.bot import StreamBot, Userbot, multi_clients, work_loads_summary
+import Backend.pyrofork.bot as botmod
+from Backend.pyrofork.bot import StreamBot, multi_clients, work_loads_summary
 
 templates = Jinja2Templates(directory="Backend/fastapi/templates")
 templates.env.globals["cover_url"] = resolve_cover_url
@@ -144,6 +146,10 @@ async def dashboard_page(request: Request, _: bool = Depends(require_auth)):
         }
 
     ctx["system_stats"] = system_stats
+    try:
+        ctx["user_activity_initial"] = await get_activity_overview(1, 12)
+    except Exception:
+        ctx["user_activity_initial"] = {"users": [], "online_count": 0, "total": 0, "page": 1, "per_page": 12, "total_pages": 1}
     return templates.TemplateResponse("dashboard.html", ctx)
 
 
@@ -250,7 +256,7 @@ async def tools_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
     #----- Bot Admin Manager needs a session string AND more than one bot token
-    ctx["userbot_configured"] = Userbot is not None
+    ctx["userbot_configured"] = botmod.Userbot is not None
     ctx["multi_token_available"] = len(multi_clients) > 1
     return templates.TemplateResponse("tools.html", ctx)
 
@@ -268,6 +274,6 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
     ctx.update({
         "current_user": get_current_user(request),
         "settings": settings,
-        "userbot_configured": bool(Telegram.USER_SESSION_STRING and Telegram.USER_SESSION_STRING.strip()),
+        "userbot_configured": botmod.Userbot is not None,
     })
     return templates.TemplateResponse("settings.html", ctx)

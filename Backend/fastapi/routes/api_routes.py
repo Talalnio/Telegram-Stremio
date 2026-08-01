@@ -18,6 +18,7 @@ import Backend
 from Backend import StartTime, __version__, db
 from Backend.fastapi.routes.stream_routes import _streamer_by_client
 from Backend.fastapi.routes.stremio_routes import invalidate_membership_cache
+from Backend.helper.analytics import get_activity_overview
 from Backend.helper.auto_catalog import (
     get_auto_catalog_settings,
     get_auto_catalog_sync_status,
@@ -51,6 +52,15 @@ from Backend.helper.metadata import (
 from Backend.helper.passwords import hash_password, verify_password
 from Backend.helper.pyro import get_readable_file_size, get_readable_time
 from Backend.helper.scan_manager import dbcheck_manager, duplicate_manager, scan_manager
+from Backend.helper.session_auth import (
+    disconnect_session,
+    get_session_status,
+    reconnect_session,
+    remove_session,
+    start_login,
+    submit_code,
+    submit_password,
+)
 from Backend.helper.settings_manager import SettingsManager
 from Backend.helper.split_files import strip_part_suffix
 from Backend.helper.subtitles import (
@@ -61,9 +71,9 @@ from Backend.helper.subtitles import (
     resolve_subtitle_message,
 )
 from Backend.logger import LOGGER
+import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import (
     StreamBot,
-    Userbot,
     client_avg_mbps,
     client_dc_map,
     client_failures,
@@ -1568,6 +1578,100 @@ async def update_auto_catalog_settings_api(payload: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_DEFAULT_CATALOG_ENTRIES = [
+    {"id": "latest_movies", "name": "Latest Movies", "group": "Default Movies", "type": "movie"},
+    {"id": "top_movies", "name": "Popular Movies", "group": "Default Movies", "type": "movie"},
+    {"id": "latest_series", "name": "Latest Series", "group": "Default TV", "type": "series"},
+    {"id": "top_series", "name": "Popular Series", "group": "Default TV", "type": "series"},
+]
+
+
+async def get_catalog_order_api():
+    try:
+        catalogs = await db.get_custom_catalogs()
+        entries = [dict(e) for e in _DEFAULT_CATALOG_ENTRIES]
+        for c in catalogs:
+            items = c.get("items") or []
+            cid = f"custom_{c['_id']}"
+            name = c.get("name") or "Catalog"
+            group = "Auto" if c.get("auto") else "Custom"
+            has_movie = any(i.get("media_type") == "movie" for i in items)
+            has_series = any(i.get("media_type") == "tv" for i in items)
+            if has_movie or not items:
+                entries.append({"id": cid, "name": name, "group": group, "type": "movie"})
+            if has_series:
+                entries.append({"id": cid, "name": name, "group": group, "type": "series"})
+        for e in entries:
+            e["key"] = f"{e['id']}::{e['type']}"
+        order = await db.get_catalog_order()
+        rank = {k: i for i, k in enumerate(order)}
+        entries.sort(key=lambda e: rank.get(e["key"], rank.get(e["id"], len(order) + 1)))
+        return {"entries": entries, "order": order}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def update_catalog_order_api(payload: dict):
+    order = payload.get("order")
+    if not isinstance(order, list):
+        raise HTTPException(status_code=400, detail="order must be a list.")
+    await db.save_catalog_order(order)
+    return {"ok": True, "message": "Catalog order saved."}
+
+
+async def get_user_activity_api(page: int = 1, per_page: int = 12):
+    try:
+        return await get_activity_overview(page, per_page)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def session_send_code_api(payload: dict):
+    try:
+        return await start_login(payload.get("phone"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def session_verify_code_api(payload: dict):
+    try:
+        return await submit_code(payload.get("login_id"), payload.get("code"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def session_verify_password_api(payload: dict):
+    try:
+        return await submit_password(payload.get("login_id"), payload.get("password"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def session_status_api():
+    return await get_session_status()
+
+
+async def session_disconnect_api():
+    return await disconnect_session()
+
+
+async def session_reconnect_api():
+    try:
+        return await reconnect_session()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def session_remove_api():
+    return await remove_session()
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2387,7 +2491,7 @@ def _no_privileges() -> ChatPrivileges:
 
 async def _bot_member_status(chat_id, bot_user_id) -> str:
     try:
-        m = await Userbot.get_chat_member(chat_id, bot_user_id)
+        m = await botmod.Userbot.get_chat_member(chat_id, bot_user_id)
         st = m.status
         if st in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return "admin"
@@ -2420,7 +2524,7 @@ def _friendly_promote_error(exc) -> str:
 
 async def _session_rights(chat_id) -> dict:
     try:
-        me = await Userbot.get_chat_member(chat_id, "me")
+        me = await botmod.Userbot.get_chat_member(chat_id, "me")
     except Exception as e:
         return {"manageable": False, "status": "unknown", "reason": f"Couldn't check your rights: {e}"}
     st = me.status
@@ -2437,9 +2541,9 @@ async def _session_rights(chat_id) -> dict:
 
 
 async def bot_admin_scan_api() -> dict:
-    if Userbot is None:
+    if botmod.Userbot is None:
         return {"status": "error", "reason": "no_session",
-                "message": "Add a session string (USER_SESSION_STRING) to manage channel admins."}
+                "message": "Connect your Telegram session from the Settings page to manage channel admins."}
 
     bots = await _managed_bots()
     if len(bots) <= 1:
@@ -2459,7 +2563,7 @@ async def bot_admin_scan_api() -> dict:
         }
 
         try:
-            chat = await Userbot.get_chat(cid)
+            chat = await botmod.Userbot.get_chat(cid)
             entry["name"] = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(cid)
             entry["accessible"] = True
         except Exception as e:
@@ -2476,7 +2580,7 @@ async def bot_admin_scan_api() -> dict:
             entry["bots"][str(b["user_id"])] = await _bot_member_status(cid, b["user_id"])
 
         try:
-            async for m in Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
+            async for m in botmod.Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
                 u = getattr(m, "user", None)
                 if u and getattr(u, "is_bot", False) and u.id not in managed_ids:
                     entry["orphans"].append({
@@ -2499,7 +2603,7 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
         return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
 
     try:
-        await Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
+        await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
         return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
     except FloodWait as fw:
         wait = int(getattr(fw, "value", getattr(fw, "x", 5)) or 5)
@@ -2512,9 +2616,9 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
         up = str(e).upper()
         if _retry and ("PARTICIPANT" in up or "USER_NOT_MUTUAL_CONTACT" in up):
             try:
-                await Userbot.add_chat_members(chat_id, bid)
+                await botmod.Userbot.add_chat_members(chat_id, bid)
                 await asyncio.sleep(0.5)
-                await Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
+                await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
                 return {"bot": label, "user_id": bid, "status": "added", "message": "Added and promoted to admin."}
             except Exception as e2:
                 return {"bot": label, "user_id": bid, "status": "error", "message": _friendly_promote_error(e2)}
@@ -2524,7 +2628,7 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
 async def _demote_one(chat_id, user) -> dict:
     label = getattr(user, "first_name", None) or (f"@{user.username}" if getattr(user, "username", None) else str(user.id))
     try:
-        await Userbot.promote_chat_member(chat_id, user.id, privileges=_no_privileges())
+        await botmod.Userbot.promote_chat_member(chat_id, user.id, privileges=_no_privileges())
         return {"bot": label, "user_id": user.id, "status": "demoted", "message": "Admin rights removed (orphan)."}
     except Exception as e:
         return {"bot": label, "user_id": user.id, "status": "error", "message": _friendly_promote_error(e)}
@@ -2539,7 +2643,7 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
             ch_result = {"id": str(cid), "name": str(cid), "items": []}
 
             try:
-                chat = await Userbot.get_chat(cid)
+                chat = await botmod.Userbot.get_chat(cid)
                 ch_result["name"] = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(cid)
             except Exception as e:
                 ch_result["items"].append({"bot": "—", "status": "error", "message": f"Channel not accessible: {e}"})
@@ -2563,7 +2667,7 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
 
             if demote_orphans:
                 try:
-                    async for m in Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
+                    async for m in botmod.Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
                         u = getattr(m, "user", None)
                         if u and getattr(u, "is_bot", False) and u.id not in managed_ids:
                             ch_result["items"].append(await _demote_one(cid, u))
@@ -2584,8 +2688,8 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
 
 
 async def bot_admin_apply_api(payload: dict | None = None) -> dict:
-    if Userbot is None:
-        raise HTTPException(status_code=503, detail="No session string configured.")
+    if botmod.Userbot is None:
+        raise HTTPException(status_code=503, detail="No Telegram session connected. Connect one from Settings.")
 
     if _bot_admin_apply_state["running"]:
         raise HTTPException(status_code=409, detail="An apply run is already in progress.")

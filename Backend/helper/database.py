@@ -155,6 +155,18 @@ class Database:
             LOGGER.error(f"Database.save_settings error: {e}")
             return False
 
+    async def get_catalog_order(self) -> List[str]:
+        doc = await self.dbs["tracking"]["state"].find_one({"_id": "catalog_order"})
+        return list((doc or {}).get("order", []))
+
+    async def save_catalog_order(self, order: List[str]) -> bool:
+        await self.dbs["tracking"]["state"].update_one(
+            {"_id": "catalog_order"},
+            {"$set": {"order": [str(x) for x in (order or [])]}},
+            upsert=True,
+        )
+        return True
+
 
 
     async def connect_storage_db(self, uri: str, index: int) -> bool:
@@ -1114,9 +1126,11 @@ class Database:
     #----- Multi Database Method for insert/update/delete/list
     #-----
 
-    async def _build_part_id_and_size(self, parts: List[dict]) -> Tuple[str, str]:
+    async def _build_part_id_and_size(self, parts: List[dict], archive: Optional[str] = None) -> Tuple[str, str]:
         sorted_parts = sorted(parts, key=lambda p: p.get("part_number", 0))
         payload = {"parts": [{"chat_id": p["chat_id"], "msg_id": p["msg_id"]} for p in sorted_parts]}
+        if archive == "zip":
+            payload["zip"] = True
         encoded = await encode_string(payload)
         total_bytes = sum(p.get("size_bytes", 0) for p in sorted_parts)
         from Backend.helper.pyro import get_readable_file_size 
@@ -1236,7 +1250,8 @@ class Database:
                 "msg_id": msg_id,
                 "size_bytes": raw_size,
             }
-            part_id, part_size = await self._build_part_id_and_size([part])
+            archive = "zip" if str(group_key).endswith(".zip") else None
+            part_id, part_size = await self._build_part_id_and_size([part], archive)
             quality_detail = QualityDetail(
                 quality=metadata_info['quality'],
                 id=part_id,
@@ -1345,7 +1360,8 @@ class Database:
                     p for p in existing_parts if p.get("part_number") != new_part.get("part_number")
                 ]
                 existing_parts.append(new_part)
-                new_id, new_size = await self._build_part_id_and_size(existing_parts)
+                archive = "zip" if str(group_key).endswith(".zip") else None
+                new_id, new_size = await self._build_part_id_and_size(existing_parts, archive)
                 q["parts"] = existing_parts
                 q["id"] = new_id
                 q["size"] = new_size
@@ -2189,6 +2205,12 @@ class Database:
         result = await self.dbs["tracking"]["api_tokens"].delete_one({"token": token})
         return result.deleted_count > 0
 
+    async def set_token_config(self, token: str, config: dict) -> bool:
+        result = await self.dbs["tracking"]["api_tokens"].update_one(
+            {"token": token}, {"$set": {"config": config}}
+        )
+        return result.modified_count > 0 or result.matched_count > 0
+
     async def link_token_user(self, token: str, user_id: int, name: str = None) -> bool:
         #----- Link an existing token to a Telegram user_id; elevate to admin when
         #----- the linked user is the configured owner. Optionally overwrite the name.
@@ -2375,6 +2397,16 @@ class Database:
                 "logged_at":   datetime.utcnow(),
             }
             await self.dbs["tracking"]["stream_analytics"].insert_one(record)
+            token = stats.get("meta", {}).get("token")
+            if token:
+                upd = {"last_active": datetime.utcnow()}
+                if record.get("title"):
+                    upd["last_title"] = record["title"]
+                if record.get("user_name"):
+                    upd["name"] = record["user_name"]
+                await self.dbs["tracking"]["user_activity"].update_one(
+                    {"_id": token}, {"$set": upd, "$inc": {"streams": 1}}, upsert=True
+                )
         except Exception as e:
             LOGGER.warning(f"Stream analytics log failed: {e}")
 

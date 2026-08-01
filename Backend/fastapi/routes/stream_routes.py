@@ -14,14 +14,16 @@ from fastapi.responses import StreamingResponse
 
 from Backend import db
 from Backend.fastapi.security.tokens import verify_token
+from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
 from Backend.helper.encrypt import decode_string
 from Backend.helper.utils import track_usage
 from Backend.helper.virtual_dl import resolve_virtual_parts, virtual_stream_generator
+from Backend.helper.zip_stream import resolve_zip_entry
 from Backend.logger import LOGGER
+import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import (
     USERBOT_CLIENT_INDEX,
-    Userbot,
     client_dc_map,
     client_failures,
     multi_clients,
@@ -255,15 +257,37 @@ async def subtitle_handler(token: str, id: str, name: str, token_data: dict = De
 @router.get("/dl/{token}/{id}/{name}")
 @router.head("/dl/{token}/{id}/{name}")
 async def stream_handler(request: Request, token: str, id: str, name: str, token_data: dict = Depends(verify_token)):
+    if request.method != "HEAD":
+        asyncio.create_task(record_stream_start(
+            token,
+            token_data.get("name") if token_data else None,
+            client_ip_from(request),
+            request.headers.get("user-agent", ""),
+        ))
     decoded = await decode_string(id)
 
     if decoded.get("global"):
+        if decoded.get("zip"):
+            return await global_zip_media_streamer(
+                request=request, parts_payload=decoded["parts"],
+                token=token, token_data=token_data, stream_id_hash=id,
+            )
+        if "parts" in decoded:
+            return await global_virtual_media_streamer(
+                request=request, parts_payload=decoded["parts"],
+                token=token, token_data=token_data, stream_id_hash=id,
+            )
         return await global_media_streamer(
             request=request, chat_id=int(decoded["chat_id"]), msg_id=int(decoded["msg_id"]),
             token=token, token_data=token_data, stream_id_hash=id,
         )
 
     if "parts" in decoded:
+        if decoded.get("zip"):
+            return await db_zip_media_streamer(
+                request=request, parts_payload=decoded["parts"],
+                token=token, token_data=token_data, stream_id_hash=id,
+            )
         return await virtual_media_streamer(
             request=request, parts_payload=decoded["parts"],
             token=token, token_data=token_data, stream_id_hash=id,
@@ -404,10 +428,10 @@ _userbot_streamer: ByteStreamer = None
 #----- Lazily build and cache the ByteStreamer for the Userbot (None if unconfigured)
 def _get_userbot_streamer() -> ByteStreamer:
     global _userbot_streamer
-    if Userbot is None:
+    if botmod.Userbot is None:
         return None
-    if _userbot_streamer is None:
-        _userbot_streamer = ByteStreamer(Userbot, USERBOT_CLIENT_INDEX)
+    if _userbot_streamer is None or _userbot_streamer.client is not botmod.Userbot:
+        _userbot_streamer = ByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
     return _userbot_streamer
 
 
@@ -469,6 +493,146 @@ async def global_media_streamer(request: Request, chat_id: int, msg_id: int, tok
         message_id=msg_id,
     )
     return StreamingResponse(body_gen, headers=headers, status_code=status, media_type=mime_type)
+
+
+#----- Stream a split Global Search file (multiple parts) through the Userbot session
+async def global_virtual_media_streamer(request: Request, parts_payload: list, token: str, token_data: dict = None, stream_id_hash: str = None):
+    streamer = _get_userbot_streamer()
+    if streamer is None:
+        raise HTTPException(status_code=503, detail="Global Search streaming is unavailable (no Userbot connected)")
+
+    parts, file_size = await resolve_virtual_parts(parts_payload, streamer, prefix_100=False)
+    if not parts or file_size <= 0:
+        raise HTTPException(status_code=404, detail="Split media parts not accessible via Global Search")
+
+    range_header = request.headers.get("Range", "")
+    start, end = parse_range_header(range_header, file_size)
+    req_length = end - start + 1
+    chunk_size = 1024 * 1024
+    stream_id = secrets.token_hex(8)
+    decoded_name = unquote(request.path_params.get("name", ""))
+    final_title = await _lookup_title(stream_id_hash, decoded_name)
+
+    meta = {
+        "request_path": str(request.url.path),
+        "client_host": request.client.host if request.client else None,
+        "title": final_title,
+        "user_name": token_data.get("name", "Unknown") if token_data else "Unknown",
+        "token": token,
+        "global_search": True,
+        "split_parts": len(parts),
+    }
+
+    asyncio.create_task(track_usage(stream_id, token, token_data))
+
+    file_name, mime_type = _resolve_filename_mime(parts[0]["file_id"])
+    headers, status = _build_stream_headers(mime_type, file_name, req_length, range_header, start, end, file_size)
+
+    if request.method == "HEAD":
+        return PlainResponse(status_code=status, headers=headers)
+
+    body_gen = virtual_stream_generator(
+        parts=parts, start=start, end=end, chunk_size=chunk_size,
+        streamer=streamer, client_index=USERBOT_CLIENT_INDEX, request=request, meta=meta,
+        stream_id=stream_id, parallelism=1, prefetch_count=1,
+    )
+    return StreamingResponse(body_gen, headers=headers, status_code=status, media_type=mime_type)
+
+
+#----- Read a byte range from the concatenated virtual parts into memory
+async def _read_virtual_range(parts, start, length, streamer, request, client_index=USERBOT_CLIENT_INDEX, parallelism=1, prefetch_count=1):
+    buf = bytearray()
+    gen = virtual_stream_generator(
+        parts=parts, start=start, end=start + length - 1, chunk_size=1024 * 1024,
+        streamer=streamer, client_index=client_index, request=request,
+        meta={"title": "zip-index", "user_name": "system", "token": ""},
+        stream_id=secrets.token_hex(6), parallelism=parallelism, prefetch_count=prefetch_count,
+    )
+    try:
+        async for chunk in gen:
+            buf.extend(chunk)
+            if len(buf) >= length:
+                break
+    finally:
+        await gen.aclose()
+    return bytes(buf[:length])
+
+
+#----- Stream a split ZIP archive (.zip.001/.002 ...) as its inner video, with seeking.
+#----- Only STORED (uncompressed) archives are seekable; the inner file bytes are served
+#----- directly at their offset inside the concatenated zip (no stream-unzip needed).
+async def _zip_media_streamer(request, parts_payload, token, token_data, stream_id_hash, streamer, client_index, prefix_100, parallelism, prefetch_count):
+    if streamer is None:
+        raise HTTPException(status_code=503, detail="ZIP streaming is unavailable (no client/session)")
+
+    parts, zip_size = await resolve_virtual_parts(parts_payload, streamer, prefix_100=prefix_100)
+    if not parts or zip_size <= 0:
+        raise HTTPException(status_code=404, detail="Split archive parts not accessible")
+
+    async def _read(off, length):
+        return await _read_virtual_range(parts, off, length, streamer, request, client_index, parallelism, prefetch_count)
+
+    entry = await resolve_zip_entry(_read, zip_size)
+    if not entry:
+        raise HTTPException(status_code=415, detail="Unreadable or incomplete split archive")
+    if entry["method"] != 0:
+        raise HTTPException(
+            status_code=415,
+            detail="This archive is compressed; only stored (uncompressed) ZIP archives can be seek-streamed.",
+        )
+
+    inner_size = entry["size"]
+    data_offset = entry["data_offset"]
+    if inner_size <= 0 or data_offset + inner_size > zip_size:
+        raise HTTPException(status_code=415, detail="Split archive has an unexpected layout")
+
+    range_header = request.headers.get("Range", "")
+    start, end = parse_range_header(range_header, inner_size)
+    req_length = end - start + 1
+    stream_id = secrets.token_hex(8)
+    inner_name = (entry.get("name") or "").split("/")[-1] or unquote(request.path_params.get("name", "")) or "video.mkv"
+    mime_type = mimetypes.guess_type(inner_name)[0] or "video/x-matroska"
+
+    meta = {
+        "request_path": str(request.url.path),
+        "client_host": request.client.host if request.client else None,
+        "title": await _lookup_title(stream_id_hash, inner_name),
+        "user_name": token_data.get("name", "Unknown") if token_data else "Unknown",
+        "token": token,
+        "zip_parts": len(parts),
+    }
+    asyncio.create_task(track_usage(stream_id, token, token_data))
+
+    headers, status = _build_stream_headers(mime_type, inner_name, req_length, range_header, start, end, inner_size)
+    if request.method == "HEAD":
+        return PlainResponse(status_code=status, headers=headers)
+
+    body_gen = virtual_stream_generator(
+        parts=parts, start=data_offset + start, end=data_offset + end, chunk_size=1024 * 1024,
+        streamer=streamer, client_index=client_index, request=request, meta=meta,
+        stream_id=stream_id, parallelism=parallelism, prefetch_count=prefetch_count,
+    )
+    return StreamingResponse(body_gen, headers=headers, status_code=status, media_type=mime_type)
+
+
+#----- ZIP split from Global Search (streamed via the Userbot session)
+async def global_zip_media_streamer(request: Request, parts_payload: list, token: str, token_data: dict = None, stream_id_hash: str = None):
+    return await _zip_media_streamer(
+        request, parts_payload, token, token_data, stream_id_hash,
+        _get_userbot_streamer(), USERBOT_CLIENT_INDEX, False, 1, 1,
+    )
+
+
+#----- ZIP split from the indexed library (streamed via the multi-bot pool)
+async def db_zip_media_streamer(request: Request, parts_payload: list, token: str, token_data: dict = None, stream_id_hash: str = None):
+    index = select_best_client(0)
+    tg_client = multi_clients[index]
+    streamer = _get_streamer(tg_client, index)
+    parallelism, prefetch_count = get_parallel_prefetch(len(multi_clients) - 1)
+    return await _zip_media_streamer(
+        request, parts_payload, token, token_data, stream_id_hash,
+        streamer, index, True, parallelism, prefetch_count,
+    )
 
 
 #----- Live and recent stream telemetry, pruning stale active entries

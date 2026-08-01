@@ -13,6 +13,7 @@ from pyrogram.errors import UserNotParticipant
 
 from Backend import __version__, db
 from Backend.config import Telegram
+from Backend.helper.analytics import client_ip_from, record_client
 from Backend.fastapi.security.tokens import verify_token
 from Backend.fastapi.themes import DEFAULT_THEME, get_theme
 from Backend.helper.fanart import fanart_artwork
@@ -272,6 +273,13 @@ def get_resolution_priority(stream_name: str) -> int:
     return 1
 
 
+#----- Canonical quality label used by per-token quality filtering
+def stream_res_label(stream_name: str) -> str:
+    return {2160: "4K", 1080: "1080p", 720: "720p", 480: "480p", 360: "360p"}.get(
+        get_resolution_priority(stream_name), "other"
+    )
+
+
 #----- Manifest describing the addon's catalogs/resources for this token
 @router.get("/{token}/manifest.json")
 async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
@@ -354,6 +362,27 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
                         "extra": [{"name": "skip"}],
                         "extraSupported": ["skip"],
                     })
+        except Exception:
+            pass
+
+        try:
+            order = await db.get_catalog_order()
+            token_order = (token_data.get("config") or {}).get("catalog_order") or []
+            effective = token_order or order
+            if effective:
+                rank = {k: i for i, k in enumerate(effective)}
+
+                def _crank(c):
+                    key = f"{c.get('id')}::{c.get('type')}"
+                    return rank.get(key, rank.get(c.get("id"), len(effective) + 1))
+
+                catalogs.sort(key=_crank)
+            hidden = set((token_data.get("config") or {}).get("hidden_catalogs") or [])
+            if hidden:
+                catalogs = [
+                    c for c in catalogs
+                    if c.get("id") not in hidden and f"{c.get('id')}::{c.get('type')}" not in hidden
+                ]
         except Exception:
             pass
 
@@ -597,9 +626,13 @@ async def _global_streams_for(token: str, imdb_id: str, media_type: str, season_
 
     streams = []
     for r in global_results:
-        _, stream_title = format_stream_details(r["title"], r["quality"], r["size"], is_split=False)
+        is_split = bool(r.get("is_split"))
+        _, stream_title = format_stream_details(r["title"], r["quality"], r["size"], is_split=is_split)
         stream_name = f"🌐 GLOBAL {r['quality']}"
         stream_title = f"{stream_title}\n📡 {r['source_chat']}"
+        if is_split:
+            kind = "zip parts" if r.get("is_zip") else "parts"
+            stream_title += f" · 📦 {r.get('part_count', 0)} {kind}"
         url = f"{SettingsManager.current().base_url}/dl/{token}/{r['token']}/{quote(r['title'])}"
         size_bytes = parse_size_to_bytes(r.get("size", ""))
         streams.append({"name": stream_name, "title": stream_title, "url": url, "size_bytes": size_bytes})
@@ -643,8 +676,16 @@ async def get_streams(
     token: str,
     media_type: str,
     id: str,
+    request: Request,
     token_data: dict = Depends(verify_token)
 ):
+    #----- Capture the real app/device from the addon-protocol UA (not the spoofed video UA)
+    asyncio.create_task(record_client(
+        token,
+        token_data.get("name") if token_data else None,
+        client_ip_from(request),
+        request.headers.get("user-agent", ""),
+    ))
 
     if token_data.get("subscription_expired"):
         return {
@@ -754,17 +795,26 @@ async def get_streams(
         except Exception as e:
             LOGGER.error(f"[GLOBAL SEARCH] stream search failed for {imdb_id}: {e}")
 
+    #----- Per-token quality filter (fall back to all if it would hide everything)
+    config = token_data.get("config") or {}
+    quality_filter = set(config.get("quality_filter") or [])
+    if quality_filter and streams:
+        filtered = [s for s in streams if stream_res_label(s.get("name", "")) in quality_filter]
+        if filtered:
+            streams = filtered
+
     if not streams:
         return {"streams": []}
 
+    ascending = config.get("quality_sort") == "asc"
     if is_combined:
         streams.sort(key=lambda s: s.get("episode_start", 0))
         streams.sort(key=lambda s: s.get("name_key", ""))
-        streams.sort(key=lambda s: get_resolution_priority(s.get("name", "")), reverse=True)
+        streams.sort(key=lambda s: get_resolution_priority(s.get("name", "")), reverse=not ascending)
     else:
         streams.sort(
             key=lambda s: (get_resolution_priority(s.get("name", "")), s.get("size_bytes", 0)),
-            reverse=True
+            reverse=not ascending
         )
     name_count: dict = {}
     for s in streams:
@@ -785,26 +835,64 @@ async def configure_addon(token: str, request: Request):
 
     token_doc = await db.get_api_token(token)
     user_name = "Unknown"
-    expiry_str = "N/A"
+    expiry_str = "Never"
     status_color = "#ef4444"
     status_text = "Unknown"
 
+    def _expired(when):
+        ref = datetime.utcnow()
+        try:
+            if when.tzinfo is not None:
+                ref = datetime.now(timezone.utc)
+        except AttributeError:
+            pass
+        return when < ref
+
+    def _fmt(when):
+        try:
+            return when.strftime("%d %b %Y").lstrip("0")
+        except Exception:
+            return "N/A"
+
     if token_doc:
         uid = token_doc.get("user_id")
+        is_admin = bool(token_doc.get("is_admin"))
+        try:
+            is_admin = is_admin or (uid is not None and int(uid) == int(Telegram.OWNER_ID))
+        except (TypeError, ValueError):
+            pass
+
+        user = None
         if uid:
             try:
                 user = await db.get_user(int(uid))
-                if user:
-                    user_name = user.get("first_name") or user.get("username") or f"User {uid}"
-                    expiry = user.get("subscription_expiry")
-                    if expiry:
-                        expiry_str = expiry.strftime("%d %b %Y").lstrip("0")
-                    if user.get("subscription_status") == "active":
-                        status_color, status_text = "#22c55e", "Active"
-                    else:
-                        status_color, status_text = "#ef4444", "Expired"
             except Exception:
-                pass
+                user = None
+        if user:
+            user_name = user.get("first_name") or user.get("username") or f"User {uid}"
+        elif uid:
+            user_name = f"User {uid}"
+
+        token_expiry = token_doc.get("expires_at")
+        if is_admin:
+            status_color, status_text, expiry_str = "#22c55e", "Admin", "Never"
+        elif token_doc.get("subscription_exempt"):
+            status_color, status_text, expiry_str = "#22c55e", "Active", "Never"
+        elif token_expiry is not None:
+            expiry_str = _fmt(token_expiry)
+            if _expired(token_expiry):
+                status_color, status_text = "#ef4444", "Expired"
+            else:
+                status_color, status_text = "#22c55e", "Active"
+        elif SettingsManager.current().subscription:
+            expiry = user.get("subscription_expiry") if user else None
+            if user and user.get("subscription_status") == "active" and expiry and not _expired(expiry):
+                status_color, status_text, expiry_str = "#22c55e", "Active", _fmt(expiry)
+            else:
+                status_color, status_text = "#ef4444", "Expired"
+                expiry_str = _fmt(expiry) if expiry else "N/A"
+        else:
+            status_color, status_text, expiry_str = "#22c55e", "Active", "Never"
 
     return templates.TemplateResponse("stremio_configure.html", {
         "request": request,
@@ -816,3 +904,60 @@ async def configure_addon(token: str, request: Request):
         "status_text": status_text,
         "status_color": status_color,
     })
+
+
+#----- Catalogs this token can see, in effective (token or global) order
+async def _addon_catalogs_for_token(token_data: dict) -> list:
+    entries = [
+        {"id": "latest_movies", "name": "Latest Movies", "type": "movie"},
+        {"id": "top_movies", "name": "Popular Movies", "type": "movie"},
+        {"id": "latest_series", "name": "Latest Series", "type": "series"},
+        {"id": "top_series", "name": "Popular Series", "type": "series"},
+    ]
+    try:
+        for c in await db.get_custom_catalogs():
+            items = [i for i in (c.get("items") or []) if _token_can_view(*_effective_visibility(c, i), token_data)]
+            if not items:
+                continue
+            cid, name = f"custom_{c['_id']}", (c.get("name") or "Catalog")
+            if any(i.get("media_type") == "movie" for i in items):
+                entries.append({"id": cid, "name": name, "type": "movie"})
+            if any(i.get("media_type") == "tv" for i in items):
+                entries.append({"id": cid, "name": name, "type": "series"})
+    except Exception:
+        pass
+    for e in entries:
+        e["key"] = f"{e['id']}::{e['type']}"
+    order = await db.get_catalog_order()
+    tconf = token_data.get("config") or {}
+    effective = tconf.get("catalog_order") or order
+    if effective:
+        rank = {k: i for i, k in enumerate(effective)}
+        entries.sort(key=lambda e: rank.get(e["key"], rank.get(e["id"], len(effective) + 1)))
+    return entries
+
+
+#----- Read this token's addon config + catalog list (public, used by configure page)
+@router.get("/{token}/addon-config")
+async def get_addon_config(token: str):
+    doc = await db.get_api_token(token)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invalid token")
+    return {"config": doc.get("config") or {}, "catalogs": await _addon_catalogs_for_token(doc)}
+
+
+#----- Persist this token's addon config (public, used by configure page)
+@router.post("/{token}/addon-config")
+async def save_addon_config(token: str, payload: dict):
+    doc = await db.get_api_token(token)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invalid token")
+    valid_q = {"480p", "720p", "1080p", "4K"}
+    config = {
+        "quality_sort": "asc" if payload.get("quality_sort") == "asc" else "desc",
+        "quality_filter": [q for q in (payload.get("quality_filter") or []) if q in valid_q],
+        "hidden_catalogs": [str(x) for x in (payload.get("hidden_catalogs") or [])],
+        "catalog_order": [str(x) for x in (payload.get("catalog_order") or [])],
+    }
+    await db.set_token_config(token, config)
+    return {"ok": True, "config": config}
