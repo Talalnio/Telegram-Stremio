@@ -1,5 +1,5 @@
 import asyncio
-import asyncio
+import io
 import json
 import os
 import random
@@ -7,8 +7,9 @@ import secrets
 import shutil
 from datetime import datetime
 from time import time
+from urllib.parse import quote
 
-from fastapi import HTTPException, Query, Request
+from fastapi import HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pyrogram.enums import ChatMemberStatus, ChatMembersFilter
 from pyrogram.errors import FloodWait
@@ -18,7 +19,6 @@ import Backend
 from Backend import StartTime, __version__, db
 from Backend.fastapi.routes.stream_routes import _streamer_by_client
 from Backend.fastapi.routes.stremio_routes import invalidate_membership_cache
-from Backend.helper.analytics import get_activity_overview
 from Backend.helper.auto_catalog import (
     get_auto_catalog_settings,
     get_auto_catalog_sync_status,
@@ -27,7 +27,7 @@ from Backend.helper.auto_catalog import (
     update_auto_catalog_settings,
 )
 from Backend.helper.backup import export_config, import_config
-from Backend.helper.custom_dl import ByteStreamer, _speed_test_single_client, run_speed_test
+from Backend.helper.custom_dl import ACTIVE_STREAMS, ByteStreamer, _speed_test_single_client, run_speed_test
 from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.health import run_health_checks
 from Backend.helper.manual_add import resolve_telegram_message, stamp_caption_by_ref
@@ -45,6 +45,7 @@ from Backend.helper.metadata import (
     fetch_selected_tv_metadata,
     gradient_cover_path,
     resolve_cover_url,
+    search_tmdb_posters,
     search_any_candidates,
     search_movie_candidates,
     search_tv_candidates,
@@ -52,34 +53,136 @@ from Backend.helper.metadata import (
 from Backend.helper.passwords import hash_password, verify_password
 from Backend.helper.pyro import get_readable_file_size, get_readable_time
 from Backend.helper.scan_manager import dbcheck_manager, duplicate_manager, scan_manager
-from Backend.helper.session_auth import (
-    disconnect_session,
-    get_session_status,
-    reconnect_session,
-    remove_session,
-    start_login,
-    submit_code,
-    submit_password,
-)
 from Backend.helper.settings_manager import SettingsManager
 from Backend.helper.split_files import strip_part_suffix
+from Backend.helper.subtitle_search import download_remote_subtitle, extract_downloaded_subtitles, search_remote_subtitles
 from Backend.helper.subtitles import (
+    detect_language,
     list_languages,
     list_title_subtitles,
+    language_label,
     manual_ingest_subtitle,
     remove_subtitle,
     resolve_subtitle_message,
+    is_subtitle_file,
 )
 from Backend.logger import LOGGER
-import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import (
     StreamBot,
+    Userbot,
     client_avg_mbps,
     client_dc_map,
     client_failures,
     multi_clients,
     work_loads,
 )
+
+_upload_cooldowns: dict[int, float] = {}
+_upload_busy_counts: dict[int, int] = {}
+
+
+def _bot_client_entries() -> list[tuple[int, object]]:
+    entries = []
+    for idx, client in sorted(multi_clients.items(), key=lambda item: item[0]):
+        if idx < 0 or client is None:
+            continue
+        if getattr(client, "is_connected", None) is False:
+            continue
+        entries.append((idx, client))
+    if not entries and StreamBot is not None:
+        entries.append((0, StreamBot))
+    return entries
+
+
+def _client_label(index: int) -> str:
+    return "StreamBot" if index == 0 else f"Bot {index + 1}"
+
+
+def _active_stream_counts() -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for meta in ACTIVE_STREAMS.values():
+        if meta.get("status") != "active":
+            continue
+        idx = meta.get("client_index")
+        if isinstance(idx, int):
+            counts[idx] = counts.get(idx, 0) + 1
+    return counts
+
+
+def _select_upload_client(exclude: set[int] | None = None) -> tuple[int, object] | tuple[None, None]:
+    exclude = exclude or set()
+    now_ts = time()
+    entries = [(idx, client) for idx, client in _bot_client_entries() if idx not in exclude]
+    if not entries:
+        return None, None
+
+    active_counts = _active_stream_counts()
+    ready = [(idx, client) for idx, client in entries if _upload_cooldowns.get(idx, 0) <= now_ts]
+    if not ready:
+        return None, None
+
+    idle_first = [(idx, client) for idx, client in ready if active_counts.get(idx, 0) == 0] or ready
+
+    def _score(item: tuple[int, object]) -> tuple:
+        idx, _ = item
+        return (
+            active_counts.get(idx, 0),
+            _upload_busy_counts.get(idx, 0),
+            work_loads.get(idx, 0),
+            client_failures.get(idx, 0),
+            -(client_avg_mbps.get(idx, 0.0) or 0.0),
+            idx,
+        )
+
+    return min(idle_first, key=_score)
+
+
+def _next_upload_retry_after() -> int:
+    now_ts = time()
+    waits = [until - now_ts for until in _upload_cooldowns.values() if until > now_ts]
+    return max(1, int(min(waits))) if waits else 1
+
+
+async def _send_document_with_best_client(chat_ref, file_name: str, content: bytes, caption: str | None = None) -> tuple[int, object, object]:
+    tried: set[int] = set()
+    errors: list[str] = []
+
+    while True:
+        idx, client = _select_upload_client(exclude=tried)
+        if client is None:
+            break
+
+        tried.add(idx)
+        _upload_busy_counts[idx] = _upload_busy_counts.get(idx, 0) + 1
+        try:
+            stream = io.BytesIO(content)
+            stream.name = file_name
+            sent = await client.send_document(chat_ref, document=stream, file_name=file_name, caption=caption)
+            return idx, client, sent
+        except FloodWait as exc:
+            _upload_cooldowns[idx] = time() + max(int(exc.value), 1) + 1
+            errors.append(f"{_client_label(idx)} hit FloodWait ({exc.value}s)")
+            LOGGER.warning(f"[Subtitles] {_client_label(idx)} hit FloodWait {exc.value}s during subtitle upload")
+        except Exception as exc:
+            errors.append(f"{_client_label(idx)} failed: {exc}")
+            LOGGER.warning(f"[Subtitles] {_client_label(idx)} could not upload subtitle: {exc}")
+        finally:
+            _upload_busy_counts[idx] = max(0, _upload_busy_counts.get(idx, 1) - 1)
+
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram bot client is connected yet.")
+
+    retry_after = _next_upload_retry_after()
+    if retry_after > 1:
+        detail = f"All available bot clients are busy or rate-limited right now. Try again in about {retry_after} seconds."
+        if errors:
+            detail += f" Last attempts: {' | '.join(errors[:3])}"
+        raise HTTPException(status_code=429, detail=detail)
+
+    detail = "Could not upload the subtitle with the available bot clients."
+    if errors:
+        detail += f" Attempts: {' | '.join(errors[:3])}"
+    raise HTTPException(status_code=500, detail=detail)
 
 
 #----- System stats
@@ -1007,6 +1110,8 @@ async def resolve_manual_metadata_api(media_type: str, selected_id: str) -> dict
 
 #----- Manual add: resolve a Telegram post link into a streamable file
 async def resolve_telegram_api(payload: dict) -> dict:
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
     client = _scan_client()
     if client is None:
         raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
@@ -1025,6 +1130,8 @@ async def resolve_telegram_api(payload: dict) -> dict:
 
 
 async def resolve_subtitle_api(payload: dict) -> dict:
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
     client = _scan_client()
     if client is None:
         raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
@@ -1053,10 +1160,67 @@ def list_subtitle_languages_api() -> dict:
     return {"status": "success", "languages": list_languages()}
 
 
+async def list_subtitle_channels_api() -> dict:
+    settings = SettingsManager.current()
+    preferred = [("manual", ch) for ch in settings.manual_channels] + [("auth", ch) for ch in settings.auth_channels]
+    client = _scan_client()
+
+    seen: set[str] = set()
+    channels = []
+    for kind, raw in preferred:
+        channel_id = str(raw).strip()
+        if not channel_id or channel_id in seen:
+            continue
+        seen.add(channel_id)
+
+        name = channel_id
+        try:
+            if client is not None:
+                ref = int(channel_id) if channel_id.lstrip("-").isdigit() else channel_id
+                chat = await client.get_chat(ref)
+                name = getattr(chat, "title", None) or getattr(chat, "first_name", None) or channel_id
+        except Exception as e:
+            LOGGER.warning(f"[Subtitles] Could not resolve subtitle channel {channel_id}: {e}")
+
+        channels.append({
+            "id": channel_id,
+            "name": name,
+            "kind": kind,
+        })
+
+    return {"status": "success", "channels": channels}
+
+
 async def list_subtitles_api(media_type: str, tmdb_id, db_index) -> dict:
     mt = "tv" if media_type in ("tv", "series") else "movie"
     imdb_id = await _resolve_imdb_id(mt, tmdb_id, db_index)
     return {"status": "success", "subtitles": await list_title_subtitles(imdb_id)}
+
+
+async def search_subtitles_api(media_type: str, tmdb_id, db_index, season=None, episode=None) -> dict:
+    mt = "tv" if media_type in ("tv", "series") else "movie"
+    if not (tmdb_id and db_index):
+        raise HTTPException(status_code=400, detail="tmdb_id and db_index are required.")
+
+    doc = await db.get_document(mt, int(tmdb_id), int(db_index))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Title not found.")
+
+    if mt == "tv":
+        try:
+            season = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Season is required for series subtitle search.")
+        try:
+            episode = int(episode) if episode not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Episode must be a valid number when provided.")
+
+    result = await search_remote_subtitles(doc, mt, season=season, episode=episode)
+    if not result["providers"]:
+        raise HTTPException(status_code=400, detail="No subtitle providers are configured in Settings.")
+
+    return {"status": "success", "providers": result["providers"], "results": result["results"]}
 
 
 async def add_subtitles_api(payload: dict) -> dict:
@@ -1066,6 +1230,8 @@ async def add_subtitles_api(payload: dict) -> dict:
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="Provide at least one subtitle to add.")
 
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
     client = _scan_client()
     if client is None:
         raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
@@ -1101,6 +1267,283 @@ async def add_subtitles_api(payload: dict) -> dict:
     if errors:
         message += f" {len(errors)} failed: {' '.join(errors)}"
     return {"status": "success", "message": message, "added": added, "errors": errors}
+
+
+async def upload_subtitle_api(
+    media_type: str,
+    tmdb_id,
+    db_index,
+    channel_id: str,
+    lang_code: str | None,
+    season,
+    episode,
+    file: UploadFile,
+) -> dict:
+    mt = "tv" if media_type in ("tv", "series") else "movie"
+    imdb_id = await _resolve_imdb_id(mt, tmdb_id, db_index)
+
+    if not file or not getattr(file, "filename", None):
+        raise HTTPException(status_code=400, detail="Subtitle file is required.")
+
+    filename = str(file.filename).strip()
+    if not is_subtitle_file(filename):
+        raise HTTPException(status_code=400, detail="Only subtitle files (.srt, .vtt, .ass, .ssa, .sub) are supported.")
+
+    settings = SettingsManager.current()
+    allowed_channels = {str(c).strip() for c in (list(settings.manual_channels) + list(settings.auth_channels)) if str(c).strip()}
+    target_channel = str(channel_id or "").strip()
+    if not target_channel:
+        raise HTTPException(status_code=400, detail="channel_id is required.")
+    if target_channel not in allowed_channels:
+        raise HTTPException(status_code=400, detail="Select a configured MANUAL or AUTH channel.")
+
+    if mt == "tv":
+        try:
+            season_num = int(season)
+            episode_num = int(episode)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Season and episode are required for series subtitles.")
+    else:
+        season_num = None
+        episode_num = None
+    chosen_code = str(lang_code or "").strip().lower()
+    if not chosen_code:
+        chosen_code = detect_language(filename)[0]
+
+
+    try:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="The uploaded subtitle file is empty.")
+
+        ref = int(target_channel) if target_channel.lstrip("-").isdigit() else target_channel
+        used_idx, _, sent = await _send_document_with_best_client(ref, filename, raw)
+        sent_doc = await manual_ingest_subtitle(
+            imdb_id=imdb_id,
+            media_type=mt,
+            season=season_num,
+            episode=episode_num,
+            lang_code=chosen_code,
+            chat_id=sent.chat.id,
+            msg_id=sent.id,
+            name=filename,
+            source="upload",
+        )
+        return {
+            "status": "success",
+            "message": "Subtitle added to the channel successfully.",
+            "subtitle": {
+                "name": sent_doc["name"],
+                "lang_label": sent_doc["lang_label"],
+                "upload_client": _client_label(used_idx),
+                "chat_id": sent_doc["chat_id"],
+                "msg_id": sent_doc["msg_id"],
+                "season": sent_doc["season"],
+                "episode": sent_doc["episode"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not upload subtitle: {exc}")
+
+
+async def upload_poster_api(
+    media_type: str,
+    tmdb_id,
+    db_index,
+    channel_id: str,
+    file: UploadFile,
+    reference_url: str | None = None,
+) -> dict:
+    mt = "tv" if media_type in ("tv", "series") else "movie"
+    if not (tmdb_id and db_index):
+        raise HTTPException(status_code=400, detail="tmdb_id and db_index are required.")
+    doc = await db.get_document(mt, int(tmdb_id), int(db_index))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Title not found.")
+
+    if not file or not getattr(file, "filename", None):
+        raise HTTPException(status_code=400, detail="Poster image is required.")
+
+    filename = str(file.filename).strip()
+    ext = os.path.splitext(filename)[1].lower()
+    allowed_exts = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail="Only image files (.jpg, .jpeg, .png, .webp, .avif) are supported.")
+
+    settings = SettingsManager.current()
+    allowed_channels = {str(c).strip() for c in (list(settings.manual_channels) + list(settings.auth_channels)) if str(c).strip()}
+    target_channel = str(channel_id or "").strip()
+    if not target_channel:
+        raise HTTPException(status_code=400, detail="channel_id is required.")
+    if target_channel not in allowed_channels:
+        raise HTTPException(status_code=400, detail="Select a configured MANUAL or AUTH channel.")
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
+
+    caption_lines = [f"{doc.get('title') or 'Untitled'} ({doc.get('release_year') or 'N/A'})"]
+    ref_value = str(reference_url or doc.get("poster") or "").strip()
+    if ref_value:
+        caption_lines.append(f"Poster URL: {ref_value}")
+    caption = "\n".join(caption_lines)
+
+    try:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="The uploaded poster file is empty.")
+
+        ref = int(target_channel) if target_channel.lstrip("-").isdigit() else target_channel
+        used_idx, _, sent = await _send_document_with_best_client(ref, filename, raw, caption=caption)
+        encoded = await encode_string({"chat_id": int(str(sent.chat.id).replace("-100", "")), "msg_id": sent.id})
+        poster_path = f"/image/{encoded}/{quote(filename, safe='')}"
+
+        update_data = {
+            "poster": poster_path,
+            "updated_on": datetime.utcnow(),
+        }
+        if mt == "tv":
+            for season in doc.get("seasons") or []:
+                for episode in season.get("episodes") or []:
+                    if not episode.get("episode_backdrop"):
+                        episode["episode_backdrop"] = doc.get("backdrop") or poster_path
+            update_data["seasons"] = doc.get("seasons") or []
+
+        result = await db.update_document(mt, int(tmdb_id), int(db_index), update_data)
+        if not result:
+            raise HTTPException(status_code=500, detail="Poster uploaded but the media record could not be updated.")
+
+        return {
+            "status": "success",
+            "message": "Poster uploaded and linked successfully.",
+            "poster": poster_path,
+            "upload_client": _client_label(used_idx),
+            "chat_id": str(sent.chat.id).replace("-100", ""),
+            "msg_id": sent.id,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not upload poster: {exc}")
+
+
+async def search_posters_api(media_type: str, tmdb_id, db_index, language: str = "all") -> dict:
+    mt = "tv" if media_type in ("tv", "series") else "movie"
+    if not (tmdb_id and db_index):
+        raise HTTPException(status_code=400, detail="tmdb_id and db_index are required.")
+
+    doc = await db.get_document(mt, int(tmdb_id), int(db_index))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Title not found.")
+
+    current_tmdb_id = doc.get("tmdb_id")
+    try:
+        normalized_tmdb_id = int(current_tmdb_id)
+    except (TypeError, ValueError):
+        normalized_tmdb_id = 0
+    if normalized_tmdb_id <= 0:
+        raise HTTPException(status_code=400, detail="Poster search from TMDB is only available for titles linked to a valid TMDB id.")
+
+    normalized_lang = (language or "all").strip().lower()
+    if normalized_lang not in {"all", "en", "ar", "none"}:
+        normalized_lang = "all"
+
+    posters = await search_tmdb_posters(mt, normalized_tmdb_id, normalized_lang)
+    return {
+        "status": "success",
+        "tmdb_id": normalized_tmdb_id,
+        "language": normalized_lang,
+        "results": posters,
+    }
+
+
+async def import_subtitle_search_result_api(payload: dict) -> dict:
+    media_type = "tv" if payload.get("media_type") in ("tv", "series") else "movie"
+    imdb_id = await _resolve_imdb_id(media_type, payload.get("tmdb_id"), payload.get("db_index"))
+    channel_id = str(payload.get("channel_id") or "").strip()
+    lang_code = str(payload.get("lang_code") or "").strip().lower()
+    result = payload.get("result") or {}
+
+    if not isinstance(result, dict) or not result.get("provider"):
+        raise HTTPException(status_code=400, detail="A subtitle search result is required.")
+
+    settings = SettingsManager.current()
+    allowed_channels = {str(c).strip() for c in (list(settings.manual_channels) + list(settings.auth_channels)) if str(c).strip()}
+    if channel_id not in allowed_channels:
+        raise HTTPException(status_code=400, detail="Select a configured MANUAL or AUTH channel.")
+
+    season = payload.get("season") if media_type == "tv" else None
+    episode = payload.get("episode") if media_type == "tv" else None
+    if media_type == "tv":
+        try:
+            season = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Season is required for series subtitles.")
+        try:
+            episode = int(episode) if episode not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Episode must be a valid number when provided.")
+
+    if not _bot_client_entries():
+        raise HTTPException(status_code=503, detail="No Telegram client is connected yet.")
+
+    try:
+        filename, content = await download_remote_subtitle(result, season=season, episode=episode)
+        if not content:
+            raise HTTPException(status_code=400, detail="The provider returned an empty subtitle file.")
+
+        final_lang = lang_code or str(result.get("lang_code") or "").strip().lower() or "und"
+        ref = int(channel_id) if channel_id.lstrip("-").isdigit() else channel_id
+        extracted = extract_downloaded_subtitles(filename, content, result, season=season, episode=episode)
+        if not extracted:
+            raise HTTPException(status_code=400, detail="No usable subtitle files were found in the downloaded result.")
+
+        added = []
+        primary_upload_idx = None
+        for item in extracted:
+            used_idx, _, sent = await _send_document_with_best_client(ref, item["name"], item["content"])
+            if primary_upload_idx is None:
+                primary_upload_idx = used_idx
+            stored = await manual_ingest_subtitle(
+                imdb_id=imdb_id,
+                media_type=media_type,
+                season=item.get("season"),
+                episode=item.get("episode"),
+                lang_code=final_lang,
+                chat_id=sent.chat.id,
+                msg_id=sent.id,
+                name=item["name"],
+                source=str(result.get("provider") or "search"),
+            )
+            added.append(stored)
+
+        primary = added[0]
+        count = len(added)
+        if count > 1:
+            message = f"Downloaded and added {count} subtitles to the channel successfully."
+        else:
+            message = "Subtitle downloaded and added to the channel successfully."
+        return {
+            "status": "success",
+            "message": message,
+            "added_count": count,
+            "subtitle": {
+                "name": primary["name"],
+                "lang_label": primary["lang_label"],
+                "lang_code": primary["lang_code"],
+                "provider": result.get("provider"),
+                "provider_label": result.get("provider_label"),
+                "upload_client": _client_label(primary_upload_idx or 0),
+                "season": primary["season"],
+                "episode": primary["episode"],
+                "chat_id": primary["chat_id"],
+                "msg_id": primary["msg_id"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not import subtitle: {exc}")
 
 
 async def remove_subtitle_api(payload: dict) -> dict:
@@ -1578,100 +2021,6 @@ async def update_auto_catalog_settings_api(payload: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_DEFAULT_CATALOG_ENTRIES = [
-    {"id": "latest_movies", "name": "Latest Movies", "group": "Default Movies", "type": "movie"},
-    {"id": "top_movies", "name": "Popular Movies", "group": "Default Movies", "type": "movie"},
-    {"id": "latest_series", "name": "Latest Series", "group": "Default TV", "type": "series"},
-    {"id": "top_series", "name": "Popular Series", "group": "Default TV", "type": "series"},
-]
-
-
-async def get_catalog_order_api():
-    try:
-        catalogs = await db.get_custom_catalogs()
-        entries = [dict(e) for e in _DEFAULT_CATALOG_ENTRIES]
-        for c in catalogs:
-            items = c.get("items") or []
-            cid = f"custom_{c['_id']}"
-            name = c.get("name") or "Catalog"
-            group = "Auto" if c.get("auto") else "Custom"
-            has_movie = any(i.get("media_type") == "movie" for i in items)
-            has_series = any(i.get("media_type") == "tv" for i in items)
-            if has_movie or not items:
-                entries.append({"id": cid, "name": name, "group": group, "type": "movie"})
-            if has_series:
-                entries.append({"id": cid, "name": name, "group": group, "type": "series"})
-        for e in entries:
-            e["key"] = f"{e['id']}::{e['type']}"
-        order = await db.get_catalog_order()
-        rank = {k: i for i, k in enumerate(order)}
-        entries.sort(key=lambda e: rank.get(e["key"], rank.get(e["id"], len(order) + 1)))
-        return {"entries": entries, "order": order}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def update_catalog_order_api(payload: dict):
-    order = payload.get("order")
-    if not isinstance(order, list):
-        raise HTTPException(status_code=400, detail="order must be a list.")
-    await db.save_catalog_order(order)
-    return {"ok": True, "message": "Catalog order saved."}
-
-
-async def get_user_activity_api(page: int = 1, per_page: int = 12):
-    try:
-        return await get_activity_overview(page, per_page)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def session_send_code_api(payload: dict):
-    try:
-        return await start_login(payload.get("phone"))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def session_verify_code_api(payload: dict):
-    try:
-        return await submit_code(payload.get("login_id"), payload.get("code"))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def session_verify_password_api(payload: dict):
-    try:
-        return await submit_password(payload.get("login_id"), payload.get("password"))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def session_status_api():
-    return await get_session_status()
-
-
-async def session_disconnect_api():
-    return await disconnect_session()
-
-
-async def session_reconnect_api():
-    try:
-        return await reconnect_session()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-async def session_remove_api():
-    return await remove_session()
-
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1710,23 +2059,46 @@ async def update_settings_api(payload: dict) -> dict:
         if key in payload:
             payload[key] = bool(payload[key])
 
-    list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels"}
+    list_str_keys = {"auth_channels", "multi_tokens", "extra_databases", "global_search_channels", "anime_channels", "manual_channels", "subtitle_search_languages"}
     for key in list_str_keys:
         if key in payload:
             if not isinstance(payload[key], list):
                 raise HTTPException(status_code=400, detail=f"'{key}' must be a list.")
             payload[key] = [str(v).strip() for v in payload[key] if str(v).strip()]
 
+    if "subtitle_search_languages" in payload and not payload["subtitle_search_languages"]:
+        payload["subtitle_search_languages"] = ["eng"]
+
     if "better_poster" in payload:
         payload["better_poster"] = str(payload["better_poster"] or "").strip()
         if payload["better_poster"] and "{imdb_id}" not in payload["better_poster"]:
             raise HTTPException(status_code=400, detail="wrong betterposter url")
+
+    if "metadata_source" in payload:
+        payload["metadata_source"] = str(payload["metadata_source"] or "").strip().lower()
+        if payload["metadata_source"] not in {"auto", "cinemeta", "tmdb"}:
+            raise HTTPException(status_code=400, detail="metadata_source must be auto, cinemeta, or tmdb")
+
+    if "metadata_language" in payload:
+        payload["metadata_language"] = str(payload["metadata_language"] or "").strip().lower()
+        if payload["metadata_language"] not in {"en", "ar"}:
+            raise HTTPException(status_code=400, detail="metadata_language must be en or ar")
+
+    effective_metadata_source = payload.get("metadata_source")
+    if effective_metadata_source is None:
+        effective_metadata_source = SettingsManager.current().metadata_source
+    if effective_metadata_source != "tmdb":
+        payload["metadata_language"] = "en"
 
     if "rpdb_api_key" in payload:
         payload["rpdb_api_key"] = str(payload["rpdb_api_key"] or "").strip()
 
     if "fanart_api_key" in payload:
         payload["fanart_api_key"] = str(payload["fanart_api_key"] or "").strip()
+
+    for key in ("subdl_api_key", "subsource_api_key", "opensubtitles_api_key"):
+        if key in payload:
+            payload[key] = str(payload[key] or "").strip()
 
     if "fanart_shuffle_interval" in payload:
         try:
@@ -1843,7 +2215,7 @@ async def update_settings_api(payload: dict) -> dict:
                     )
 
     #----- Strip whitespace from string fields
-    for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
+    for key in ("tmdb_api", "metadata_source", "metadata_language", "subdl_api_key", "subsource_api_key", "opensubtitles_api_key", "base_url", "upstream_repo", "upstream_branch",
                 "admin_username", "admin_password", "session_secret", "http_proxy_url",
                 "mediaflow_password", "payment_instructions", "payment_qr_url",
                 "announcement_channel", "skip_channel"):
@@ -2491,7 +2863,7 @@ def _no_privileges() -> ChatPrivileges:
 
 async def _bot_member_status(chat_id, bot_user_id) -> str:
     try:
-        m = await botmod.Userbot.get_chat_member(chat_id, bot_user_id)
+        m = await Userbot.get_chat_member(chat_id, bot_user_id)
         st = m.status
         if st in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return "admin"
@@ -2524,7 +2896,7 @@ def _friendly_promote_error(exc) -> str:
 
 async def _session_rights(chat_id) -> dict:
     try:
-        me = await botmod.Userbot.get_chat_member(chat_id, "me")
+        me = await Userbot.get_chat_member(chat_id, "me")
     except Exception as e:
         return {"manageable": False, "status": "unknown", "reason": f"Couldn't check your rights: {e}"}
     st = me.status
@@ -2541,9 +2913,9 @@ async def _session_rights(chat_id) -> dict:
 
 
 async def bot_admin_scan_api() -> dict:
-    if botmod.Userbot is None:
+    if Userbot is None:
         return {"status": "error", "reason": "no_session",
-                "message": "Connect your Telegram session from the Settings page to manage channel admins."}
+                "message": "Add a session string (USER_SESSION_STRING) to manage channel admins."}
 
     bots = await _managed_bots()
     if len(bots) <= 1:
@@ -2563,7 +2935,7 @@ async def bot_admin_scan_api() -> dict:
         }
 
         try:
-            chat = await botmod.Userbot.get_chat(cid)
+            chat = await Userbot.get_chat(cid)
             entry["name"] = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(cid)
             entry["accessible"] = True
         except Exception as e:
@@ -2580,7 +2952,7 @@ async def bot_admin_scan_api() -> dict:
             entry["bots"][str(b["user_id"])] = await _bot_member_status(cid, b["user_id"])
 
         try:
-            async for m in botmod.Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
+            async for m in Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
                 u = getattr(m, "user", None)
                 if u and getattr(u, "is_bot", False) and u.id not in managed_ids:
                     entry["orphans"].append({
@@ -2603,7 +2975,7 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
         return {"bot": label, "user_id": bid, "status": "already", "message": "Already an admin."}
 
     try:
-        await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
+        await Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
         return {"bot": label, "user_id": bid, "status": "added", "message": "Promoted to admin."}
     except FloodWait as fw:
         wait = int(getattr(fw, "value", getattr(fw, "x", 5)) or 5)
@@ -2616,9 +2988,9 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
         up = str(e).upper()
         if _retry and ("PARTICIPANT" in up or "USER_NOT_MUTUAL_CONTACT" in up):
             try:
-                await botmod.Userbot.add_chat_members(chat_id, bid)
+                await Userbot.add_chat_members(chat_id, bid)
                 await asyncio.sleep(0.5)
-                await botmod.Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
+                await Userbot.promote_chat_member(chat_id, bid, privileges=privileges)
                 return {"bot": label, "user_id": bid, "status": "added", "message": "Added and promoted to admin."}
             except Exception as e2:
                 return {"bot": label, "user_id": bid, "status": "error", "message": _friendly_promote_error(e2)}
@@ -2628,7 +3000,7 @@ async def _promote_one(chat_id, bot: dict, privileges: ChatPrivileges, _retry: b
 async def _demote_one(chat_id, user) -> dict:
     label = getattr(user, "first_name", None) or (f"@{user.username}" if getattr(user, "username", None) else str(user.id))
     try:
-        await botmod.Userbot.promote_chat_member(chat_id, user.id, privileges=_no_privileges())
+        await Userbot.promote_chat_member(chat_id, user.id, privileges=_no_privileges())
         return {"bot": label, "user_id": user.id, "status": "demoted", "message": "Admin rights removed (orphan)."}
     except Exception as e:
         return {"bot": label, "user_id": user.id, "status": "error", "message": _friendly_promote_error(e)}
@@ -2643,7 +3015,7 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
             ch_result = {"id": str(cid), "name": str(cid), "items": []}
 
             try:
-                chat = await botmod.Userbot.get_chat(cid)
+                chat = await Userbot.get_chat(cid)
                 ch_result["name"] = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(cid)
             except Exception as e:
                 ch_result["items"].append({"bot": "—", "status": "error", "message": f"Channel not accessible: {e}"})
@@ -2667,7 +3039,7 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
 
             if demote_orphans:
                 try:
-                    async for m in botmod.Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
+                    async for m in Userbot.get_chat_members(cid, filter=ChatMembersFilter.ADMINISTRATORS):
                         u = getattr(m, "user", None)
                         if u and getattr(u, "is_bot", False) and u.id not in managed_ids:
                             ch_result["items"].append(await _demote_one(cid, u))
@@ -2688,8 +3060,8 @@ async def _run_bot_admin_apply(channel_ids, selected, demote_orphans, managed_id
 
 
 async def bot_admin_apply_api(payload: dict | None = None) -> dict:
-    if botmod.Userbot is None:
-        raise HTTPException(status_code=503, detail="No Telegram session connected. Connect one from Settings.")
+    if Userbot is None:
+        raise HTTPException(status_code=503, detail="No session string configured.")
 
     if _bot_admin_apply_state["running"]:
         raise HTTPException(status_code=409, detail="An apply run is already in progress.")

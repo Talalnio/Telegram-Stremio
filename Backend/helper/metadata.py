@@ -30,6 +30,7 @@ TMDB_SEARCH_CACHE: dict = {}
 TMDB_DETAILS_CACHE: dict = {}
 EPISODE_CACHE: dict = {}
 ALT_TITLES_CACHE: dict = {}
+TMDB_POSTERS_CACHE: dict = {}
 
 API_SEMAPHORE = asyncio.Semaphore(12)
 
@@ -66,11 +67,25 @@ _MULTIPART_RE = re.compile(r"(?:part|cd|disc|disk)[s._-]*\d+(?=\.\w+$)", re.IGNO
 COMBINED_SEASON = 0
 COMBINED_EPISODE_BASE = 1000
 
-_tmdb_client: aioTMDb | None = None
+_tmdb_clients: dict[str, aioTMDb] = {}
 _tmdb_client_key: str | None = None
 
 
 #----- ── TMDb client & image helpers ─────────────────────────────────────────────
+def metadata_source_preference() -> str:
+    try:
+        return SettingsManager.current().metadata_source
+    except Exception:
+        return "auto"
+
+
+def metadata_language_preference() -> str:
+    try:
+        return SettingsManager.current().metadata_language
+    except Exception:
+        return "en"
+
+
 def tmdb_api_key() -> str:
     try:
         key = SettingsManager.current().tmdb_api
@@ -81,17 +96,106 @@ def tmdb_api_key() -> str:
     return getattr(Telegram, "TMDB_API", "") or ""
 
 
-def get_tmdb_client() -> aioTMDb:
-    global _tmdb_client, _tmdb_client_key
+def get_tmdb_client(language: str = "en") -> aioTMDb:
+    global _tmdb_clients, _tmdb_client_key
     current_key = tmdb_api_key()
-    if _tmdb_client is None or _tmdb_client_key != current_key:
-        _tmdb_client = aioTMDb(key=current_key, language="en-US", region="US")
+    if _tmdb_client_key != current_key:
+        _tmdb_clients = {}
         _tmdb_client_key = current_key
-    return _tmdb_client
+    lang = "ar" if str(language or "").lower() == "ar" else "en"
+    client = _tmdb_clients.get(lang)
+    if client is None:
+        locale = ("ar-SA", "SA") if lang == "ar" else ("en-US", "US")
+        client = aioTMDb(key=current_key, language=locale[0], region=locale[1])
+        _tmdb_clients[lang] = client
+    return client
 
 
 def format_tmdb_image(path: str, size="w500") -> str:
     return f"https://image.tmdb.org/t/p/{size}{path}" if path else ""
+
+
+def _poster_language_rank(selected_language: str, iso_code) -> int:
+    code = (iso_code or "").strip().lower()
+    selected = (selected_language or "all").strip().lower()
+    if selected == "all":
+        return 0 if code else 1
+    if selected == "none":
+        return 0 if not code else 2
+    if code == selected:
+        return 0
+    if not code:
+        return 1
+    return 3
+
+
+async def search_tmdb_posters(media_type: str, tmdb_id, language: str = "all") -> list[dict]:
+    mt = "tv" if media_type in ("tv", "series") else "movie"
+    try:
+        item_id = int(tmdb_id)
+    except (TypeError, ValueError):
+        return []
+    if item_id <= 0:
+        return []
+
+    normalized_lang = (language or "all").strip().lower()
+    if normalized_lang not in {"all", "en", "ar", "none"}:
+        normalized_lang = "all"
+    cache_key = (mt, item_id, normalized_lang)
+
+    async def _produce():
+        try:
+            client = get_tmdb_client()
+            async with API_SEMAPHORE:
+                target = client.movie(item_id) if mt == "movie" else client.tv(item_id)
+                images = await target.images()
+        except Exception as e:
+            LOGGER.warning(f"TMDb poster search failed for {mt} id={item_id}: {e}")
+            return []
+
+        posters = list(getattr(images, "posters", None) or [])
+        results: list[dict] = []
+        for poster in posters:
+            file_path = getattr(poster, "file_path", None)
+            if not file_path:
+                continue
+            iso_code = getattr(poster, "iso_639_1", None)
+            normalized_code = (iso_code or "").strip().lower()
+            if normalized_lang == "none" and normalized_code:
+                continue
+            if normalized_lang in {"en", "ar"} and normalized_code != normalized_lang:
+                continue
+
+            width = int(getattr(poster, "width", 0) or 0)
+            height = int(getattr(poster, "height", 0) or 0)
+            vote_average = float(getattr(poster, "vote_average", 0) or 0)
+            vote_count = int(getattr(poster, "vote_count", 0) or 0)
+            results.append({
+                "url": format_tmdb_image(file_path, "original"),
+                "preview": format_tmdb_image(file_path, "w500"),
+                "thumbnail": format_tmdb_image(file_path, "w342"),
+                "file_path": file_path,
+                "language": normalized_code or "",
+                "language_label": "No text" if not normalized_code else normalized_code.upper(),
+                "width": width,
+                "height": height,
+                "vote_average": round(vote_average, 2),
+                "vote_count": vote_count,
+                "aspect_ratio": round((width / height), 3) if width and height else 0,
+            })
+
+        results.sort(
+            key=lambda item: (
+                _poster_language_rank(normalized_lang, item.get("language")),
+                -int(item.get("vote_count") or 0),
+                -float(item.get("vote_average") or 0),
+                -(int(item.get("width") or 0) * int(item.get("height") or 0)),
+                item.get("file_path") or "",
+            )
+        )
+        return results
+
+    return await _cached_call(TMDB_POSTERS_CACHE, cache_key, "tmdb_posters", _produce)
 
 
 #----- Placeholder cover host. Only the path is stored, so this host can change any time.
@@ -441,12 +545,12 @@ async def _tmdb_alternative_titles(media_type: str, tmdb_id) -> list[str]:
 
 
 #----- ── Detail fetchers ─────────────────────────────────────────────────────────
-async def _tmdb_details(media_type: str, item_id):
-    cache_key = (media_type, item_id)
+async def _tmdb_details(media_type: str, item_id, language: str = "en"):
+    cache_key = (media_type, item_id, language)
 
     async def _produce():
         try:
-            client = get_tmdb_client()
+            client = get_tmdb_client(language)
             async with API_SEMAPHORE:
                 target = client.movie(item_id) if media_type == "movie" else client.tv(item_id)
                 details = await target.details(append_to_response="external_ids,credits")
@@ -459,17 +563,44 @@ async def _tmdb_details(media_type: str, item_id):
     return await _cached_call(TMDB_DETAILS_CACHE, cache_key, "tmdb_details", _produce)
 
 
-async def _tmdb_episode_details(tv_id, season, episode):
-    key = (tv_id, season, episode)
+async def _tmdb_episode_details(tv_id, season, episode, language: str = "en"):
+    key = (tv_id, season, episode, language)
 
     async def _produce():
         try:
             async with API_SEMAPHORE:
-                return await get_tmdb_client().episode(tv_id, season, episode).details()
+                return await get_tmdb_client(language).episode(tv_id, season, episode).details()
         except Exception:
             return None
 
     return await _cached_call(EPISODE_CACHE, key, "tmdb_ep", _produce)
+
+
+async def _apply_tmdb_overview_preference(
+    payload: dict,
+    media_type: str,
+    tmdb_id,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+) -> dict:
+    if metadata_source_preference() != "tmdb" or metadata_language_preference() != "ar" or not tmdb_id:
+        return payload
+
+    try:
+        localized = await _tmdb_details(media_type, tmdb_id, language="ar")
+        overview = getattr(localized, "overview", "") if localized else ""
+        if overview:
+            payload["description"] = overview
+
+        if media_type == "tv" and season is not None and episode is not None:
+            localized_ep = await _tmdb_episode_details(tmdb_id, season, episode, language="ar")
+            ep_overview = getattr(localized_ep, "overview", "") if localized_ep else ""
+            if ep_overview:
+                payload["episode_overview"] = ep_overview
+    except Exception as e:
+        LOGGER.warning(f"TMDb localized overview fetch failed for {media_type} id={tmdb_id}: {e}")
+
+    return payload
 
 
 async def _cached_imdb_detail(imdb_id: str, media_type: str):
@@ -669,8 +800,120 @@ async def _fetch_anime_movie(title, encoded_string, year, quality) -> dict | Non
 
 
 #----- ── TV & movie resolution ───────────────────────────────────────────────────
+def _coerce_tmdb_id(value) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+async def _fetch_movie_metadata_cinemeta_only(title, encoded_string, year=None, quality=None, imdb_id=None, tmdb_id=None) -> dict | None:
+    if not imdb_id and tmdb_id:
+        imdb_id = await _tmdb_external_imdb_id("movie", tmdb_id)
+    if not imdb_id:
+        imdb_id = await safe_imdb_search(title, "movie", year)
+        if not imdb_id:
+            LOGGER.info(f"No Cinemeta movie found for '{title}' (year={year})")
+            return None
+
+    try:
+        imdb_details = await _cached_imdb_detail(imdb_id, "movie")
+    except Exception as e:
+        LOGGER.warning(f"Cinemeta-only movie fetch failed [{title}] -> {e}")
+        return None
+    if not imdb_details:
+        return None
+
+    if title and title != "manual-rescan":
+        sim = _title_similarity(title, imdb_details.get("title", ""))
+        if sim < _CINEMETA_THRESHOLD:
+            LOGGER.info(f"Cinemeta-only movie title mismatch for '{title}': got '{imdb_details.get('title', '')}' (sim={sim:.2f})")
+            return None
+
+    return _build_imdb_movie_payload(imdb_details, imdb_id, title, quality, encoded_string)
+
+
+async def _fetch_movie_metadata_tmdb_only(title, encoded_string, year=None, quality=None, imdb_id=None, tmdb_id=None) -> dict | None:
+    tmdb_id = _coerce_tmdb_id(tmdb_id)
+    if not tmdb_id and imdb_id:
+        imdb_details = await _cached_imdb_detail(imdb_id, "movie")
+        tmdb_id = _coerce_tmdb_id(imdb_details.get("moviedb_id")) if imdb_details else None
+    if not tmdb_id:
+        tmdb_result = await safe_tmdb_search(title, "movie", year) or (await safe_tmdb_search(title, "movie", None) if year else None)
+        if not tmdb_result:
+            LOGGER.info(f"No TMDb movie found for '{title}' (year={year})")
+            return None
+        tmdb_id = tmdb_result.id
+
+    movie = await _tmdb_details("movie", tmdb_id)
+    if not movie:
+        LOGGER.info(f"TMDb movie details failed for id={tmdb_id} ('{title}')")
+        return None
+    payload = _build_tmdb_movie_payload(movie, quality, encoded_string)
+    return await _apply_tmdb_overview_preference(payload, "movie", tmdb_id)
+
+
+async def _fetch_tv_metadata_cinemeta_only(title, season, episode, encoded_string, year=None, quality=None, imdb_id=None, tmdb_id=None) -> dict | None:
+    if not imdb_id and tmdb_id:
+        imdb_id = await _tmdb_external_imdb_id("tv", tmdb_id)
+    if not imdb_id:
+        imdb_id = await safe_imdb_search(title, "tvSeries", year)
+        if not imdb_id:
+            LOGGER.info(f"No Cinemeta TV result for '{title}' S{season:02d}E{episode:02d} (year={year})")
+            return None
+
+    try:
+        imdb_tv = await _cached_imdb_detail(imdb_id, "tvSeries")
+        imdb_ep = await _cached_imdb_season(imdb_id, season, episode)
+    except Exception as e:
+        LOGGER.warning(f"Cinemeta-only TV fetch failed [{imdb_id}] -> {e}")
+        return None
+    if not imdb_tv:
+        return None
+
+    if title and title != "manual-rescan":
+        sim = _title_similarity(title, imdb_tv.get("title", ""))
+        if sim < _CINEMETA_THRESHOLD:
+            LOGGER.info(f"Cinemeta-only TV title mismatch for '{title}': got '{imdb_tv.get('title', '')}' (sim={sim:.2f})")
+            return None
+
+    return _build_imdb_tv_payload(imdb_tv, imdb_ep or {}, imdb_id, title, season, episode, quality, encoded_string)
+
+
+async def _fetch_tv_metadata_tmdb_only(title, season, episode, encoded_string, year=None, quality=None, imdb_id=None, tmdb_id=None) -> dict | None:
+    tmdb_id = _coerce_tmdb_id(tmdb_id)
+    if not tmdb_id and imdb_id:
+        imdb_tv = await _cached_imdb_detail(imdb_id, "tvSeries")
+        tmdb_id = _coerce_tmdb_id(imdb_tv.get("moviedb_id")) if imdb_tv else None
+    if not tmdb_id:
+        tmdb_search = await safe_tmdb_search(title, "tv", year)
+        if not tmdb_search:
+            LOGGER.info(f"No TMDb TV result for '{title}' S{season:02d}E{episode:02d} (year={year})")
+            return None
+        tmdb_id = tmdb_search.id
+
+    tv = await _tmdb_details("tv", tmdb_id)
+    if not tv:
+        LOGGER.info(f"TMDb TV details failed for id={tmdb_id} ('{title}')")
+        return None
+    ep = await _tmdb_episode_details(tmdb_id, season, episode)
+    payload = _build_tmdb_tv_payload(tv, ep, season, episode, quality, encoded_string)
+    return await _apply_tmdb_overview_preference(payload, "tv", tmdb_id, season, episode)
+
+
 async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, quality=None, default_id=None) -> dict | None:
     imdb_id, tmdb_id, explicit_imdb_id, use_tmdb = _split_default_id(default_id)
+    preferred_source = metadata_source_preference()
+
+    if preferred_source == "cinemeta":
+        return await _fetch_tv_metadata_cinemeta_only(
+            title, season, episode, encoded_string, year, quality, imdb_id=imdb_id, tmdb_id=tmdb_id
+        )
+    if preferred_source == "tmdb":
+        return await _fetch_tv_metadata_tmdb_only(
+            title, season, episode, encoded_string, year, quality, imdb_id=imdb_id, tmdb_id=tmdb_id
+        )
+
     imdb_tv = None
     imdb_ep = None
 
@@ -716,6 +959,17 @@ async def fetch_tv_metadata(title, season, episode, encoded_string, year=None, q
 
 async def fetch_movie_metadata(title, encoded_string, year=None, quality=None, default_id=None) -> dict | None:
     imdb_id, tmdb_id, explicit_imdb_id, use_tmdb = _split_default_id(default_id)
+    preferred_source = metadata_source_preference()
+
+    if preferred_source == "cinemeta":
+        return await _fetch_movie_metadata_cinemeta_only(
+            title, encoded_string, year, quality, imdb_id=imdb_id, tmdb_id=tmdb_id
+        )
+    if preferred_source == "tmdb":
+        return await _fetch_movie_metadata_tmdb_only(
+            title, encoded_string, year, quality, imdb_id=imdb_id, tmdb_id=tmdb_id
+        )
+
     imdb_details = None
 
     if not imdb_id and not tmdb_id:
@@ -1085,8 +1339,64 @@ async def fetch_selected_movie_metadata(selected_id: str) -> dict | None:
 async def fetch_selected_tv_metadata(selected_id: str) -> dict | None:
     selected_id = str(selected_id).strip()
     imdb_id, tmdb_id, _, use_tmdb = _split_default_id(selected_id)
+    preferred_source = metadata_source_preference()
     if not imdb_id and not tmdb_id:
         return None
+
+    if preferred_source == "tmdb":
+        tmdb_id = _coerce_tmdb_id(tmdb_id)
+        if not tmdb_id and imdb_id:
+            imdb_tv = await _cached_imdb_detail(imdb_id, "tvSeries")
+            tmdb_id = _coerce_tmdb_id(imdb_tv.get("moviedb_id")) if imdb_tv else None
+        if not tmdb_id:
+            return None
+
+        tv = await _tmdb_details("tv", tmdb_id)
+        if not tv:
+            return None
+        first_air = getattr(tv, "first_air_date", None)
+        runtime = _format_runtime(tv.episode_run_time[0] if getattr(tv, "episode_run_time", None) else None)
+        payload = {
+            "tmdb_id": tv.id,
+            "imdb_id": getattr(getattr(tv, "external_ids", None), "imdb_id", None),
+            "title": tv.name,
+            "release_year": getattr(first_air, "year", 0) if first_air else 0,
+            "rating": getattr(tv, "vote_average", 0) or 0,
+            "description": tv.overview or "",
+            "poster": format_tmdb_image(tv.poster_path),
+            "backdrop": format_tmdb_image(tv.backdrop_path, "original"),
+            "logo": get_tmdb_logo(getattr(tv, "images", None)),
+            "genres": [g.name for g in (tv.genres or [])],
+            "cast": _extract_cast(tv),
+            "runtime": str(runtime),
+            "media_type": "tv",
+        }
+        return await _apply_tmdb_overview_preference(payload, "tv", tmdb_id)
+
+    if preferred_source == "cinemeta":
+        if not imdb_id and tmdb_id:
+            imdb_id = await _tmdb_external_imdb_id("tv", tmdb_id)
+        if not imdb_id:
+            return None
+        imdb_tv = await get_detail(imdb_id=imdb_id, media_type="tvSeries")
+        if not imdb_tv:
+            return None
+        images = format_imdb_images(imdb_id)
+        return {
+            "tmdb_id": int(imdb_tv.get("moviedb_id")) if imdb_tv.get("moviedb_id") else None,
+            "imdb_id": imdb_id,
+            "title": imdb_tv.get("title", ""),
+            "release_year": imdb_tv.get("releaseDetailed", {}).get("year", 0),
+            "rating": imdb_tv.get("rating", {}).get("star", 0),
+            "description": imdb_tv.get("plot", ""),
+            "poster": images["poster"],
+            "backdrop": images["backdrop"],
+            "logo": images["logo"],
+            "genres": imdb_tv.get("genre", []),
+            "cast": imdb_tv.get("cast", []),
+            "runtime": str(imdb_tv.get("runtime") or ""),
+            "media_type": "tv",
+        }
 
     imdb_tv = None
     if imdb_id and not use_tmdb:
@@ -1110,7 +1420,7 @@ async def fetch_selected_tv_metadata(selected_id: str) -> dict | None:
             return None
         first_air = getattr(tv, "first_air_date", None)
         runtime = _format_runtime(tv.episode_run_time[0] if getattr(tv, "episode_run_time", None) else None)
-        return {
+        payload = {
             "tmdb_id": tv.id,
             "imdb_id": getattr(getattr(tv, "external_ids", None), "imdb_id", None),
             "title": tv.name,
@@ -1125,6 +1435,7 @@ async def fetch_selected_tv_metadata(selected_id: str) -> dict | None:
             "runtime": str(runtime),
             "media_type": "tv",
         }
+        return await _apply_tmdb_overview_preference(payload, "tv", tmdb_id)
 
     images = format_imdb_images(imdb_id)
     return {

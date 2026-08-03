@@ -18,8 +18,6 @@
 .bk-import .bk-ic { background: #22c55e22; color: #22c55e; }
 .bk-txt { display: flex; flex-direction: column; line-height: 1.25; }
 .bk-txt b { font-size: 0.95rem; color: var(--text); }
-.bk-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem; }
-.bk-chip { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; font-weight: 700; padding: 0.35rem 0.75rem; border-radius: 9999px; color: var(--text-sec); border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); }
 .bk-txt small { font-size: 0.75rem; color: var(--text-sec); }
 .bk-status { margin-top: 0.9rem; font-size: 0.85rem; color: var(--text-sec); display: flex; align-items: center; gap: 0.5rem; }
 .bk-warn { color: var(--text-sec); font-size: 0.78rem; margin-top: 0.85rem; }
@@ -345,6 +343,29 @@
                     placeholder="Your TMDB v3 API key" spellcheck="false">
             </div>
             <div>
+                <label class="s-label" for="metadata_source">Metadata Source</label>
+                <select id="metadata_source" class="s-input" onchange="toggleMetadataLanguage()">
+                    <option value="auto" {% if settings.metadata_source == 'auto' %}selected{% endif %}>Auto (Cinemeta then TMDB)</option>
+                    <option value="cinemeta" {% if settings.metadata_source == 'cinemeta' %}selected{% endif %}>Cinemeta only</option>
+                    <option value="tmdb" {% if settings.metadata_source == 'tmdb' %}selected{% endif %}>TMDB only</option>
+                </select>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block;margin-top:0.35rem">
+                    Applies automatically to newly added items. Existing items can be updated later with Rescan.
+                </span>
+            </div>
+        </div>
+        <div class="grid-2" style="margin-top:1rem">
+            <div>
+                <label class="s-label" for="metadata_language">Overview Language</label>
+                <select id="metadata_language" class="s-input">
+                    <option value="en" {% if settings.metadata_language != 'ar' %}selected{% endif %}>English only</option>
+                    <option value="ar" {% if settings.metadata_language == 'ar' %}selected{% endif %}>Arabic overview only</option>
+                </select>
+                <span id="metadata-language-help" style="color:var(--text-sec);font-size:0.8rem;display:block;margin-top:0.35rem">
+                    Arabic overview is available only when TMDB is selected. Titles, genres, and the rest stay in English.
+                </span>
+            </div>
+            <div>
                 <label class="s-label" for="base_url">Base URL</label>
                 <input type="url" id="base_url" class="s-input"
                     value="{{ settings.base_url }}"
@@ -364,6 +385,64 @@
                 <input type="text" id="upstream_branch" class="s-input"
                     value="{{ settings.upstream_branch }}"
                     placeholder="master">
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Subtitle Search ─────────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-solid fa-closed-captioning"></i> Subtitle Search</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            Configure subtitle providers for the new search flow in the media page. Search uses the languages below and lets you save the selected subtitle straight into a Telegram channel.
+        </p>
+        <div class="grid-2">
+            <div>
+                <label class="s-label" for="subdl_api_key">SubDL API Key</label>
+                <input type="text" id="subdl_api_key" class="s-input"
+                    value="{{ settings.subdl_api_key or '' }}" autocomplete="off" spellcheck="false"
+                    placeholder="Optional">
+            </div>
+            <div>
+                <label class="s-label" for="subsource_api_key">Subsource API Key</label>
+                <input type="text" id="subsource_api_key" class="s-input"
+                    value="{{ settings.subsource_api_key or '' }}" autocomplete="off" spellcheck="false"
+                    placeholder="Optional">
+            </div>
+        </div>
+        <div class="grid-2" style="margin-top:1rem">
+            <div>
+                <label class="s-label" for="opensubtitles_api_key">OpenSubtitles API Key</label>
+                <input type="text" id="opensubtitles_api_key" class="s-input"
+                    value="{{ settings.opensubtitles_api_key or '' }}" autocomplete="off" spellcheck="false"
+                    placeholder="Optional">
+            </div>
+            <div>
+                <label class="s-label">Preferred Subtitle Languages</label>
+                <div class="multi-list-items" id="subtitle_search_languages_items">
+                    {% for code in settings.subtitle_search_languages %}
+                    <div class="multi-item">
+                        <select class="s-input" data-list="subtitle_search_languages">
+                            {% for lang in subtitle_languages %}
+                            <option value="{{ lang.code }}" {% if code == lang.code %}selected{% endif %}>{{ lang.label }} ({{ lang.code }})</option>
+                            {% endfor %}
+                        </select>
+                        <button class="remove-btn" onclick="removeItem(this)" title="Remove">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="add-row">
+                    <select id="subtitle_search_languages_new" class="s-input">
+                        {% for lang in subtitle_languages %}
+                        <option value="{{ lang.code }}" {% if lang.code == 'eng' %}selected{% endif %}>{{ lang.label }} ({{ lang.code }})</option>
+                        {% endfor %}
+                    </select>
+                    <button class="add-btn" onclick="addItem('subtitle_search_languages')">+ Add Language</button>
+                </div>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block;margin-top:0.35rem">
+                    Results in the media page are filtered to these languages first. You can keep one or many, like Arabic and English together.
+                </span>
             </div>
         </div>
     </div>
@@ -566,203 +645,6 @@
 
 
 
-<!-- ── Telegram User Session ──────────────────────────────────────── -->
-<div class="settings-card">
-    <h2><i class="fa-solid fa-user-lock"></i> Telegram User Session</h2>
-    <p class="bk-desc">
-        Log in with your phone number to generate the User Session automatically — no manual
-        session string needed. It's encrypted and stored securely, and powers Global Search.
-    </p>
-
-    <div id="sess-loading" style="color:var(--text-sec);font-size:0.85rem">
-        <i class="fa-solid fa-spinner fa-spin"></i> Checking session…
-    </div>
-
-    <!-- Connected view -->
-    <div id="sess-connected" style="display:none">
-        <div class="sess-profile">
-            <div class="sess-avatar"><i class="fa-solid fa-user-astronaut"></i></div>
-            <div style="min-width:0;flex:1">
-                <div class="flex items-center gap-2 flex-wrap">
-                    <span id="sess-name" style="font-weight:800"></span>
-                    <span id="sess-live" class="sess-pill"></span>
-                </div>
-                <div id="sess-username" style="color:var(--text-sec);font-size:0.82rem"></div>
-            </div>
-        </div>
-        <div class="sess-grid">
-            <div><span class="sess-k">Phone</span><span id="sess-phone" class="sess-v">—</span></div>
-            <div><span class="sess-k">Telegram ID</span><span id="sess-id" class="sess-v">—</span></div>
-        </div>
-        <div class="flex flex-wrap gap-2 mt-4">
-            <button type="button" class="sess-btn" onclick="sessAction('reconnect')"><i class="fa-solid fa-rotate"></i> Reconnect</button>
-            <button type="button" class="sess-btn warn" onclick="sessAction('disconnect')"><i class="fa-solid fa-plug-circle-xmark"></i> Disconnect</button>
-            <button type="button" class="sess-btn danger" onclick="sessRemove()"><i class="fa-solid fa-trash"></i> Remove</button>
-        </div>
-    </div>
-
-    <!-- Login flow -->
-    <div id="sess-login" style="display:none">
-        <div id="sess-step-phone">
-            <label class="s-label">Phone number (with country code)</label>
-            <div class="flex flex-col sm:flex-row gap-2">
-                <input id="sess-phone-input" class="s-input" placeholder="+12025550123" style="flex:1">
-                <button type="button" class="sess-btn primary" onclick="sessSendCode()"><i class="fa-solid fa-paper-plane"></i> Send code</button>
-            </div>
-        </div>
-        <div id="sess-step-code" style="display:none;margin-top:0.85rem">
-            <label class="s-label">Login code (sent on Telegram)</label>
-            <div class="flex flex-col sm:flex-row gap-2">
-                <input id="sess-code-input" class="s-input" inputmode="numeric" placeholder="1 2 3 4 5" style="flex:1">
-                <button type="button" class="sess-btn primary" onclick="sessVerifyCode()"><i class="fa-solid fa-check"></i> Verify</button>
-            </div>
-        </div>
-        <div id="sess-step-pass" style="display:none;margin-top:0.85rem">
-            <label class="s-label">Two-step verification password</label>
-            <div class="flex flex-col sm:flex-row gap-2">
-                <input id="sess-pass-input" type="password" class="s-input" placeholder="Your 2FA password" style="flex:1">
-                <button type="button" class="sess-btn primary" onclick="sessVerifyPassword()"><i class="fa-solid fa-lock-open"></i> Confirm</button>
-            </div>
-        </div>
-        <p id="sess-msg" style="font-size:0.8rem;margin-top:0.7rem;display:none"></p>
-    </div>
-</div>
-
-<style>
-.sess-profile { display:flex; align-items:center; gap:0.9rem; padding:1rem; border-radius:0.9rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 90%,var(--bg)); }
-.sess-avatar { width:3rem; height:3rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; background:color-mix(in srgb,var(--primary) 18%,transparent); color:var(--primary); flex-shrink:0; }
-.sess-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; margin-top:0.85rem; }
-@media (max-width:520px){ .sess-grid { grid-template-columns:1fr; } }
-.sess-grid > div { padding:0.7rem 0.9rem; border-radius:0.8rem; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 92%,var(--bg)); }
-.sess-k { display:block; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-sec); font-weight:700; }
-.sess-v { display:block; font-weight:700; margin-top:0.2rem; word-break:break-all; }
-.sess-pill { font-size:0.62rem; font-weight:900; text-transform:uppercase; letter-spacing:0.05em; padding:0.15rem 0.55rem; border-radius:9999px; }
-.sess-pill.on { background:#22c55e22; color:#22c55e; }
-.sess-pill.off { background:#f59e0b22; color:#f59e0b; }
-.sess-btn { display:inline-flex; align-items:center; gap:0.5rem; padding:0.6rem 1.1rem; border-radius:9999px; font-weight:800; font-size:0.82rem; cursor:pointer; border:1px solid var(--border); background:color-mix(in srgb,var(--card) 92%,var(--bg)); color:var(--text); transition:all .15s; }
-.sess-btn:hover { border-color:var(--primary); }
-.sess-btn.primary { background:var(--primary); color:#fff; border-color:transparent; }
-.sess-btn.warn { color:#f59e0b; }
-.sess-btn.danger { color:#ef4444; }
-</style>
-
-<script>
-let sessLoginId = null;
-
-async function sessLoadStatus() {
-    try {
-        const res = await fetch('/api/admin/settings/session');
-        const data = await res.json();
-        document.getElementById('sess-loading').style.display = 'none';
-        if (data.connected && data.profile) {
-            const p = data.profile;
-            document.getElementById('sess-name').textContent = p.name || 'Telegram User';
-            document.getElementById('sess-username').textContent = p.username ? '@' + p.username : 'No username';
-            document.getElementById('sess-phone').textContent = p.phone || '—';
-            document.getElementById('sess-id').textContent = p.user_id || '—';
-            const live = document.getElementById('sess-live');
-            live.className = 'sess-pill ' + (data.live ? 'on' : 'off');
-            live.textContent = data.live ? 'Connected' : 'Stored (restart to activate)';
-            document.getElementById('sess-connected').style.display = '';
-            document.getElementById('sess-login').style.display = 'none';
-        } else {
-            document.getElementById('sess-connected').style.display = 'none';
-            document.getElementById('sess-login').style.display = '';
-            sessShowStep('phone');
-        }
-    } catch (e) {
-        document.getElementById('sess-loading').textContent = 'Unable to load session status.';
-    }
-}
-
-function sessShowStep(step) {
-    document.getElementById('sess-step-phone').style.display = step === 'phone' ? '' : 'none';
-    document.getElementById('sess-step-code').style.display = step === 'code' ? '' : 'none';
-    document.getElementById('sess-step-pass').style.display = step === 'pass' ? '' : 'none';
-}
-
-function sessMsg(text, ok) {
-    const el = document.getElementById('sess-msg');
-    el.style.display = '';
-    el.style.color = ok ? '#22c55e' : '#ef4444';
-    el.textContent = text;
-}
-
-async function sessSendCode() {
-    const phone = document.getElementById('sess-phone-input').value.trim();
-    if (!phone) return sessMsg('Enter your phone number.', false);
-    sessMsg('Sending code…', true);
-    try {
-        const res = await fetch('/api/admin/settings/session/send-code', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Failed to send code');
-        sessLoginId = data.login_id;
-        sessShowStep('code');
-        sessMsg('Code sent. Check your Telegram app.', true);
-    } catch (e) { sessMsg(e.message, false); }
-}
-
-async function sessVerifyCode() {
-    const code = document.getElementById('sess-code-input').value.trim();
-    if (!code) return sessMsg('Enter the login code.', false);
-    sessMsg('Verifying…', true);
-    try {
-        const res = await fetch('/api/admin/settings/session/verify-code', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login_id: sessLoginId, code })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Verification failed');
-        if (data.status === 'password_needed') {
-            sessShowStep('pass');
-            sessMsg('This account has two-step verification. Enter your password.', true);
-            return;
-        }
-        showToast('Session created successfully.', 'success', 'Telegram');
-        sessLoadStatus();
-    } catch (e) { sessMsg(e.message, false); }
-}
-
-async function sessVerifyPassword() {
-    const password = document.getElementById('sess-pass-input').value;
-    if (!password) return sessMsg('Enter your 2FA password.', false);
-    sessMsg('Confirming…', true);
-    try {
-        const res = await fetch('/api/admin/settings/session/verify-password', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login_id: sessLoginId, password })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Verification failed');
-        showToast('Session created successfully.', 'success', 'Telegram');
-        sessLoadStatus();
-    } catch (e) { sessMsg(e.message, false); }
-}
-
-async function sessAction(kind) {
-    try {
-        const res = await fetch('/api/admin/settings/session/' + kind, { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Action failed');
-        showToast(kind === 'reconnect' ? 'Reconnected.' : 'Disconnected.', 'info', 'Telegram');
-        sessLoadStatus();
-    } catch (e) { showToast(e.message, 'error', 'Telegram'); }
-}
-
-async function sessRemove() {
-    if (!confirm('Remove the stored Telegram session? Global Search will stop working until you log in again.')) return;
-    try {
-        const res = await fetch('/api/admin/settings/session', { method: 'DELETE' });
-        if (!res.ok) throw new Error();
-        showToast('Session removed.', 'info', 'Telegram');
-        sessLoadStatus();
-    } catch (e) { showToast('Failed to remove session.', 'error', 'Telegram'); }
-}
-
-document.addEventListener('DOMContentLoaded', sessLoadStatus);
-</script>
-
-
 <!-- ── Global Search (Userbot) ────────────────────────────────────── -->
 <div class="settings-card">
     <h2><i class="fa-solid fa-globe"></i> Global Search</h2>
@@ -786,7 +668,10 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
     {% if not userbot_configured %}
     <p style="color:var(--text-sec);font-size:0.8rem;margin-top:0.75rem">
         <i class="fa-solid fa-circle-info"></i>
-        Connect your <strong>Telegram User Session</strong> above to unlock Global Search.
+        Requires <code>USER_SESSION_STRING</code> to be set in
+        <code>config.env</code> (startup-critical, not editable here)
+        <strong>and a full app restart</strong>.
+        Restart the app after setting it to unlock this option.
     </p>
     {% endif %}
 
@@ -1080,13 +965,6 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
 
         <div id="restore-status" class="bk-status" style="display:none"></div>
 
-        <div class="bk-chips">
-            <span class="bk-chip"><i class="fa-solid fa-gear"></i> Settings</span>
-            <span class="bk-chip"><i class="fa-solid fa-layer-group"></i> Custom catalogs</span>
-            <span class="bk-chip"><i class="fa-solid fa-credit-card"></i> Plans</span>
-            <span class="bk-chip"><i class="fa-solid fa-key"></i> Access tokens</span>
-        </div>
-
         <p class="bk-warn">
             <i class="fa-solid fa-triangle-exclamation"></i>
             Restoring replaces your catalogs, plans and tokens, and reconnects extra databases and bot tokens from the file.
@@ -1117,6 +995,8 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
 </div>
 
 <script>
+const subtitleLanguageOptions = {{ subtitle_languages|tojson|safe }};
+
 /* ── Duplicate protection only applies when Replace Mode is off ───────── */
 function toggleDuplicateProtection() {
     const replaceOn = document.getElementById('replace_mode').checked;
@@ -1202,6 +1082,23 @@ function toggleFanartShuffle() {
     document.getElementById('fanart-shuffle-wrap').style.display = on ? '' : 'none';
 }
 
+function toggleMetadataLanguage() {
+    const source = document.getElementById('metadata_source');
+    const language = document.getElementById('metadata_language');
+    const help = document.getElementById('metadata-language-help');
+    if (!source || !language) return;
+
+    const tmdbMode = source.value === 'tmdb';
+    language.disabled = !tmdbMode;
+    if (!tmdbMode) language.value = 'en';
+
+    if (help) {
+        help.textContent = tmdbMode
+            ? 'TMDB can keep all metadata in English or use Arabic for the overview only.'
+            : 'Cinemeta and Auto use English-only overviews unless you switch the source to TMDB.';
+    }
+}
+
 /* ── Password visibility ──────────────────────────────────────────────── */
 function togglePwdVisibility() {
     const input = document.getElementById('admin_password');
@@ -1243,9 +1140,21 @@ function syncAnimeChip(cb) {
     if (chip) chip.classList.toggle('is-anime', cb.checked);
 }
 
+function subtitleLanguageRowHTML(value) {
+    const options = (subtitleLanguageOptions || []).map(lang =>
+        `<option value="${escapeHtmlAttr(lang.code)}" ${lang.code === value ? 'selected' : ''}>${escapeHtmlAttr(lang.label)} (${escapeHtmlAttr(lang.code)})</option>`
+    ).join('');
+    return `
+        <select class="s-input" data-list="subtitle_search_languages">${options}</select>
+        <button class="remove-btn" onclick="removeItem(this)" title="Remove">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    `;
+}
+
 function addItem(listKey) {
     const newInput = document.getElementById(listKey + '_new');
-    const value = newInput.value.trim();
+    const value = String(newInput.value || '').trim();
     if (!value) return;
 
     const container = document.getElementById(listKey + '_items');
@@ -1254,6 +1163,9 @@ function addItem(listKey) {
     if (listKey === 'auth_channels') {
         item.className = 'multi-item auth-item';
         item.innerHTML = authRowHTML(value, false);
+    } else if (listKey === 'subtitle_search_languages') {
+        item.className = 'multi-item';
+        item.innerHTML = subtitleLanguageRowHTML(value);
     } else {
         const isNumeric = listKey === 'approver_ids';
         item.className = 'multi-item';
@@ -1294,7 +1206,7 @@ function removeItem(btn) {
 function collectList(listKey) {
     const container = document.getElementById(listKey + '_items');
     if (!container) return [];
-    return [...container.querySelectorAll('input[data-list]')]
+    return [...container.querySelectorAll('[data-list]')]
         .map(i => i.value.trim())
         .filter(Boolean);
 }
@@ -1315,6 +1227,12 @@ async function saveSettings() {
         admin_password:                document.getElementById('admin_password').value,  // blank = keep
         session_secret:                document.getElementById('session_secret').value,  // blank = keep
         tmdb_api:                      document.getElementById('tmdb_api').value.trim(),
+        metadata_source:               document.getElementById('metadata_source').value,
+        metadata_language:             document.getElementById('metadata_language').value,
+        subdl_api_key:                 document.getElementById('subdl_api_key').value.trim(),
+        subsource_api_key:             document.getElementById('subsource_api_key').value.trim(),
+        opensubtitles_api_key:         document.getElementById('opensubtitles_api_key').value.trim(),
+        subtitle_search_languages:     collectList('subtitle_search_languages'),
         base_url:                      document.getElementById('base_url').value.trim(),
         better_poster_enabled:         document.getElementById('better_poster_enabled').checked,
         better_poster:                 document.getElementById('better_poster').value.trim(),
@@ -1461,6 +1379,11 @@ function renderSettings(s) {
     document.getElementById('admin_username').value = s.admin_username || '';
     document.getElementById('admin_password').value = '';  // never re-fill password
     document.getElementById('tmdb_api').value = s.tmdb_api || '';
+    document.getElementById('metadata_source').value = s.metadata_source || 'auto';
+    document.getElementById('metadata_language').value = s.metadata_language || 'en';
+    document.getElementById('subdl_api_key').value = s.subdl_api_key || '';
+    document.getElementById('subsource_api_key').value = s.subsource_api_key || '';
+    document.getElementById('opensubtitles_api_key').value = s.opensubtitles_api_key || '';
     document.getElementById('base_url').value = s.base_url || '';
     document.getElementById('better_poster_enabled').checked = !!s.better_poster_enabled;
     document.getElementById('better_poster').value = s.better_poster || '';
@@ -1480,6 +1403,7 @@ function renderSettings(s) {
     document.getElementById('mediaflow_proxy').checked = !!s.mediaflow_proxy;
     document.getElementById('mediaflow_password').value = s.mediaflow_password || '';
     toggleMediaflowFields();
+    toggleMetadataLanguage();
     document.getElementById('announcement_channel').value = s.announcement_channel || '';
     document.getElementById('skip_channel').value = s.skip_channel || '';
     toggleSkipDeleteField();
@@ -1490,6 +1414,7 @@ function renderSettings(s) {
     rebuildSimpleList('multi_tokens_items', s.multi_tokens, 'text');
     rebuildSimpleList('global_search_channels_items', s.global_search_channels, 'text');
     rebuildSimpleList('manual_channels_items', s.manual_channels, 'text');
+    rebuildSubtitleLanguageList(s.subtitle_search_languages || ['eng']);
 
     // Databases — needs the live connection-status dot per entry
     rebuildDatabaseList(s.database_list || []);
@@ -1525,6 +1450,18 @@ function rebuildAuthChannels(values, animeValues) {
         const item = document.createElement('div');
         item.className = 'multi-item auth-item';
         item.innerHTML = authRowHTML(val, isAnime);
+        container.appendChild(item);
+    });
+}
+
+function rebuildSubtitleLanguageList(values) {
+    const container = document.getElementById('subtitle_search_languages_items');
+    if (!container) return;
+    container.innerHTML = '';
+    (values || ['eng']).forEach(value => {
+        const item = document.createElement('div');
+        item.className = 'multi-item';
+        item.innerHTML = subtitleLanguageRowHTML(value);
         container.appendChild(item);
     });
 }
@@ -1661,6 +1598,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     toggleDuplicateProtection();
     toggleMediaflowFields();
+    toggleMetadataLanguage();
     loadDbStats();
     loadLogs();
 });

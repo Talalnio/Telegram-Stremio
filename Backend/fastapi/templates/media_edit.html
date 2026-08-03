@@ -332,7 +332,7 @@
             <div class="relative z-10 p-5 sm:p-6 lg:p-8">
                 <div class="flex flex-col md:flex-row md:items-end gap-5 sm:gap-6">
                     <div class="mx-auto md:mx-0 flex-shrink-0">
-                        <img src="{{ cover_url(media_details.poster) or '/static/placeholder.jpg' }}"
+                        <img id="hero-poster-preview" src="{{ cover_url(media_details.poster) or '/static/placeholder.jpg' }}"
                              alt="{{ media_details.title }}"
                              class="w-36 sm:w-40 md:w-48 h-54 sm:h-60 md:h-72 object-cover rounded-2xl shadow-2xl border border-hairline-strong"
                              onerror="this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'">
@@ -529,7 +529,17 @@
                 </div>
 
                 <div class="md:col-span-2">
-                    <label class="field-label">Poster URL</label>
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                        <label class="field-label mb-0">Poster URL</label>
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <button type="button" onclick="openPosterSearchModal()" class="btn-ui btn-info px-4 py-2 text-sm sm:w-auto">
+                                🔎 Search Poster
+                            </button>
+                            <button type="button" onclick="openPosterModal()" class="btn-ui btn-success px-4 py-2 text-sm sm:w-auto">
+                                🖼️ Upload Poster
+                            </button>
+                        </div>
+                    </div>
                     <input type="url" id="poster" name="poster" value="{{ media_details.poster if media_details else '' }}"
                            class="field-input">
                 </div>
@@ -713,14 +723,102 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
             <div>
                 <h3 class="section-title text-xl sm:text-2xl">Subtitles</h3>
-                <p class="muted text-sm mt-1">Attach subtitle files from a Telegram channel your bot can read.</p>
+                <p class="muted text-sm mt-1">Upload subtitle files to one of your configured channels, or keep using Telegram message links manually.</p>
             </div>
-            <button type="button" onclick="openSubtitleModal()" class="btn-ui btn-success">➕ Add Subtitle</button>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <button type="button" onclick="openSubtitleSearchModal()" class="btn-ui btn-primary">🔎 Search Subtitle</button>
+                <button type="button" onclick="openSubtitleModal()" class="btn-ui btn-success">⬆️ Upload Subtitle</button>
+            </div>
         </div>
         <div id="subtitle-list" class="space-y-2"></div>
         <div id="subtitle-empty" class="hidden text-center py-8"><p class="muted text-sm">No subtitles added yet.</p></div>
     </div>
     {% endif %}
+</div>
+
+<div id="poster-search-modal" class="fixed inset-0 z-50 hidden" aria-modal="true" role="dialog">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closePosterSearchModal()"></div>
+    <div class="absolute inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="glass-card w-full sm:max-w-4xl rounded-t-3xl sm:rounded-3xl max-h-[92dvh] sm:max-h-[90dvh] flex flex-col">
+            <div class="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-hairline">
+                <div>
+                    <h2 class="text-base sm:text-xl font-black text-text">🔎 Search Poster</h2>
+                    <p class="muted text-xs sm:text-sm mt-1">Browse all available TMDB posters for this title, filtered by the language you choose.</p>
+                </div>
+                <button onclick="closePosterSearchModal()" class="text-text-secondary hover:text-text text-3xl leading-none">&times;</button>
+            </div>
+            <div class="px-4 sm:px-6 py-5 space-y-4 overflow-y-auto flex-1 min-h-0">
+                <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Poster Language</label>
+                        <select id="poster-search-language" class="field-input">
+                            <option value="all">Any language</option>
+                            <option value="en">English</option>
+                            <option value="ar">Arabic</option>
+                            <option value="none">No text</option>
+                        </select>
+                    </div>
+                    <button id="poster-search-submit" type="button" onclick="runPosterSearch()" class="btn-ui btn-primary w-full sm:w-auto">Search Now</button>
+                </div>
+                <p id="poster-search-state" class="muted text-xs sm:text-sm hidden"></p>
+                <div id="poster-search-error" class="hidden rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200"></div>
+                <div id="poster-search-results" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+                <div id="poster-search-empty" class="hidden rounded-2xl border border-hairline bg-surface px-4 py-6 text-center">
+                    <p class="muted text-sm">No posters were found for this language. Try another filter like English, Arabic, or No text.</p>
+                </div>
+                <div id="poster-search-confirm" class="hidden rounded-3xl border border-hairline bg-surface p-4 space-y-4">
+                    <div class="flex flex-col md:flex-row gap-4">
+                        <img id="poster-search-picked-image" src="/static/placeholder.jpg" alt="Selected poster" class="w-32 h-48 object-cover rounded-2xl border border-hairline">
+                        <div class="min-w-0 flex-1">
+                            <h3 class="font-bold text-text text-sm sm:text-base">Selected poster</h3>
+                            <p id="poster-search-picked" class="muted text-sm mt-1"></p>
+                            <p id="poster-search-picked-url" class="muted text-xs mt-2 break-all"></p>
+                        </div>
+                    </div>
+                    <div class="flex flex-col sm:flex-row justify-end gap-2">
+                        <button type="button" onclick="clearPosterSelection()" class="btn-ui btn-ghost w-full sm:w-auto">Change Selection</button>
+                        <button id="poster-search-confirm-btn" type="button" onclick="confirmPosterSelection()" class="btn-ui btn-success w-full sm:w-auto">Confirm Poster</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="poster-modal" class="fixed inset-0 z-50 hidden" aria-modal="true" role="dialog">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closePosterModal()"></div>
+    <div class="absolute inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="glass-card w-full sm:max-w-xl rounded-t-3xl sm:rounded-3xl max-h-[92dvh] sm:max-h-[90dvh] flex flex-col">
+            <div class="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-hairline">
+                <h2 class="text-base sm:text-xl font-black text-text">🖼️ Upload Poster</h2>
+                <button onclick="closePosterModal()" class="text-text-secondary hover:text-text text-3xl leading-none">&times;</button>
+            </div>
+            <div class="px-4 sm:px-6 py-5 space-y-4 overflow-y-auto flex-1 min-h-0">
+                <div class="rounded-2xl border border-hairline bg-surface p-4 space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Channel *</label>
+                        <select id="poster-upload-channel" class="field-input"></select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Poster Image *</label>
+                        <input id="poster-upload-file" type="file" class="field-input" accept=".jpg,.jpeg,.png,.webp,.avif,image/*">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Poster URL Reference</label>
+                        <input id="poster-reference-url" type="url" class="field-input" placeholder="Optional external poster URL to keep in the Telegram caption">
+                    </div>
+                    <p class="muted text-xs">The uploaded image will be sent to the selected Telegram channel and then linked as this title's poster. The current Poster URL is copied here automatically so you can keep it in the caption as a reference.</p>
+                </div>
+                <div id="poster-modal-error" class="hidden rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200"></div>
+                <div id="poster-modal-success" class="hidden rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200"></div>
+                <div id="poster-upload-state" class="hidden muted text-sm"></div>
+            </div>
+            <div class="flex flex-col sm:flex-row justify-end gap-2 sm:gap-3 px-4 sm:px-6 py-4 border-t border-hairline">
+                <button onclick="closePosterModal()" class="btn-ui btn-ghost w-full sm:w-auto">Cancel</button>
+                <button id="poster-submit" onclick="submitPosterUpload()" class="btn-ui btn-success w-full sm:w-auto">Upload Poster</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div id="speed-test-modal" class="fixed inset-0 z-50 hidden" aria-modal="true" role="dialog">
@@ -860,7 +958,7 @@
     <div class="absolute inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4">
         <div class="glass-card w-full sm:max-w-xl rounded-t-3xl sm:rounded-3xl max-h-[92dvh] sm:max-h-[90dvh] flex flex-col">
             <div class="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-hairline">
-                <h2 class="text-base sm:text-xl font-black text-text">➕ Add Subtitle</h2>
+                <h2 class="text-base sm:text-xl font-black text-text">⬆️ Upload Subtitle</h2>
                 <button onclick="closeSubtitleModal()" class="text-text-secondary hover:text-text text-3xl leading-none">&times;</button>
             </div>
             <div class="px-4 sm:px-6 py-5 space-y-4 overflow-y-auto flex-1 min-h-0">
@@ -876,18 +974,105 @@
                     </div>
                 </div>
                 {% endif %}
-                <div>
-                    <div class="flex items-center justify-between gap-2 mb-2">
-                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary">Subtitle link(s) *</label>
-                        <button type="button" onclick="addSubtitleRow()" class="text-xs font-bold text-primary shrink-0"><i class="fa-solid fa-plus"></i> Add another</button>
+                <div class="rounded-2xl border border-hairline bg-surface p-4 space-y-4">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Channel *</label>
+                            <select id="sub-upload-channel" class="field-input"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Language *</label>
+                            <select id="sub-upload-lang" class="field-input"></select>
+                        </div>
                     </div>
-                    <div id="subtitle-rows" class="space-y-3"></div>
-                    <p class="muted text-xs mt-2">Forward the subtitle file to a channel your bot admins (a MANUAL channel is recommended), then paste its message link. Language is auto-detected but you can override it.</p>
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Subtitle File *</label>
+                        <input id="sub-upload-file" type="file" class="field-input" accept=".srt,.vtt,.ass,.ssa,.sub">
+                    </div>
+                    <p class="muted text-xs">Choose the target channel, subtitle language, and the file to upload. The subtitle will be stored in Telegram and linked to this title automatically.</p>
+                </div>
+
+                <details class="rounded-2xl border border-hairline bg-surface p-4">
+                    <summary class="cursor-pointer font-semibold text-sm text-text">Or add manually by Telegram message link</summary>
+                    <div class="mt-4">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary">Subtitle link(s)</label>
+                            <button type="button" onclick="addSubtitleRow()" class="text-xs font-bold text-primary shrink-0"><i class="fa-solid fa-plus"></i> Add another</button>
+                        </div>
+                        <div id="subtitle-rows" class="space-y-3"></div>
+                        <p class="muted text-xs mt-2">Forward the subtitle file to a channel your bot admins, then paste its message link here. Language is auto-detected unless you override it.</p>
+                    </div>
+                </details>
+                <p id="sub-upload-state" class="muted text-xs hidden"></p>
+                <div id="sub-modal-error" class="hidden rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200"></div>
+                <div id="sub-modal-success" class="hidden rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200"></div>
+                <div>
+                    <p class="muted text-xs">After confirmation, the app uploads the subtitle to the selected channel and saves it exactly like a manually stored Telegram subtitle.</p>
                 </div>
             </div>
             <div class="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3 px-4 sm:px-6 py-4 border-t border-hairline">
                 <button onclick="closeSubtitleModal()" class="btn-ui btn-ghost w-full sm:w-auto">Cancel</button>
-                <button id="sub-submit" onclick="submitSubtitles()" class="btn-ui btn-success w-full sm:w-auto">Add Subtitle</button>
+                <button id="sub-submit" onclick="submitSubtitles()" class="btn-ui btn-success w-full sm:w-auto">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="subtitle-search-modal" class="fixed inset-0 z-50 hidden" aria-modal="true" role="dialog">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeSubtitleSearchModal()"></div>
+    <div class="absolute inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="glass-card w-full sm:max-w-3xl rounded-t-3xl sm:rounded-3xl max-h-[92dvh] sm:max-h-[90dvh] flex flex-col">
+            <div class="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-hairline">
+                <div>
+                    <h2 class="text-base sm:text-xl font-black text-text">🔎 Search Subtitle</h2>
+                    <p class="muted text-xs sm:text-sm mt-1">Search configured providers and save the chosen subtitle into one of your Telegram channels.</p>
+                </div>
+                <button onclick="closeSubtitleSearchModal()" class="text-text-secondary hover:text-text text-3xl leading-none">&times;</button>
+            </div>
+            <div class="px-4 sm:px-6 py-5 space-y-4 overflow-y-auto flex-1 min-h-0">
+                {% if media_type == 'tv' %}
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Season *</label>
+                        <input id="search-sub-season" type="number" min="0" class="field-input" placeholder="1">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Episode</label>
+                        <input id="search-sub-episode" type="number" min="0" class="field-input" placeholder="Leave empty for complete season">
+                    </div>
+                </div>
+                <p class="muted text-xs">If you leave episode empty, the search will prefer complete season subtitles and season packs for the selected season.</p>
+                {% endif %}
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <button id="search-sub-submit" type="button" onclick="runSubtitleSearch()" class="btn-ui btn-primary w-full sm:w-auto">Search Now</button>
+                    <p id="subtitle-search-state" class="muted text-xs sm:text-sm flex-1 hidden"></p>
+                </div>
+                <div id="subtitle-search-error" class="hidden rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200"></div>
+                <div id="subtitle-search-success" class="hidden rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200"></div>
+                <div id="subtitle-search-results" class="space-y-3"></div>
+                <div id="subtitle-search-empty" class="hidden rounded-2xl border border-hairline bg-surface px-4 py-6 text-center">
+                    <p class="muted text-sm">No subtitles found yet. Try another season or episode, or check your subtitle provider keys in Settings.</p>
+                </div>
+                <div id="subtitle-search-confirm" class="hidden rounded-3xl border border-hairline bg-surface p-4 space-y-4">
+                    <div>
+                        <h3 class="font-bold text-text text-sm sm:text-base">Selected subtitle</h3>
+                        <p id="subtitle-search-picked" class="muted text-sm mt-1"></p>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Target Channel *</label>
+                            <select id="subtitle-search-channel" class="field-input"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-2">Language</label>
+                            <input id="subtitle-search-language" class="field-input" readonly>
+                        </div>
+                    </div>
+                    <div class="flex flex-col sm:flex-row justify-end gap-2">
+                        <button type="button" onclick="clearSubtitleSearchSelection()" class="btn-ui btn-ghost w-full sm:w-auto">Change Selection</button>
+                        <button id="subtitle-search-confirm-btn" type="button" onclick="confirmSubtitleImport()" class="btn-ui btn-success w-full sm:w-auto">Confirm Download</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -1950,11 +2135,324 @@
     }
 
     let subtitleLanguages = [];
+    let subtitleChannels = [];
+    let subtitleSearchResults = [];
+    let selectedSubtitleResult = null;
+    let posterSearchResults = [];
+    let selectedPosterResult = null;
 
     function subtitleLangOptions() {
         const opts = ['<option value="">Auto-detect</option>'];
         for (const l of subtitleLanguages) opts.push(`<option value="${l.code}">${l.label}</option>`);
         return opts.join('');
+    }
+
+    function subtitleChannelOptions() {
+        if (!subtitleChannels.length) {
+            return '<option value="">No configured channels</option>';
+        }
+        return subtitleChannels.map(ch => {
+            const suffix = ch.kind === 'manual' ? ' · Manual' : ' · Auth';
+            return `<option value="${escapeHtml(ch.id)}">${escapeHtml(ch.name || ch.id)}${suffix}</option>`;
+        }).join('');
+    }
+
+    function setPosterModalNotice(kind, message = '') {
+        const err = document.getElementById('poster-modal-error');
+        const ok = document.getElementById('poster-modal-success');
+        if (err) { err.classList.add('hidden'); err.textContent = ''; }
+        if (ok) { ok.classList.add('hidden'); ok.textContent = ''; }
+        if (!message) return;
+        const target = kind === 'success' ? ok : err;
+        if (!target) return;
+        target.textContent = message;
+        target.classList.remove('hidden');
+    }
+
+    function applyPosterPreview(url) {
+        const posterValue = String(url || '').trim();
+        const heroPoster = document.getElementById('hero-poster-preview');
+        const fallback = '/static/placeholder.jpg';
+        if (heroPoster) {
+            heroPoster.src = posterValue || fallback;
+        }
+    }
+
+    function setPosterSearchError(message = '') {
+        const el = document.getElementById('poster-search-error');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !message);
+    }
+
+    function setPosterSearchState(message = '', visible = false) {
+        const el = document.getElementById('poster-search-state');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !visible);
+    }
+
+    function clearPosterSelection() {
+        selectedPosterResult = null;
+        document.querySelectorAll('#poster-search-results .match-card').forEach(card => card.classList.remove('active'));
+        document.getElementById('poster-search-confirm')?.classList.add('hidden');
+        document.getElementById('poster-search-picked') && (document.getElementById('poster-search-picked').textContent = '');
+        document.getElementById('poster-search-picked-url') && (document.getElementById('poster-search-picked-url').textContent = '');
+        const img = document.getElementById('poster-search-picked-image');
+        if (img) img.src = '/static/placeholder.jpg';
+    }
+
+    function selectPosterResult(index) {
+        const item = posterSearchResults[index];
+        if (!item) return;
+        selectedPosterResult = item;
+        document.querySelectorAll('#poster-search-results .match-card').forEach(card => card.classList.remove('active'));
+        document.getElementById(`poster-result-${index}`)?.classList.add('active');
+        const picked = document.getElementById('poster-search-picked');
+        const pickedUrl = document.getElementById('poster-search-picked-url');
+        const pickedImage = document.getElementById('poster-search-picked-image');
+        if (picked) {
+            const parts = [
+                item.language_label || 'Unknown language',
+                item.width && item.height ? `${item.width}×${item.height}` : '',
+                item.vote_count ? `Votes: ${item.vote_count}` : '',
+            ].filter(Boolean);
+            picked.textContent = parts.join(' • ');
+        }
+        if (pickedUrl) pickedUrl.textContent = item.url || '';
+        if (pickedImage) pickedImage.src = item.preview || item.url || '/static/placeholder.jpg';
+        document.getElementById('poster-search-confirm')?.classList.remove('hidden');
+    }
+
+    async function openPosterSearchModal() {
+        posterSearchResults = [];
+        clearPosterSelection();
+        setPosterSearchError('');
+        setPosterSearchState('', false);
+        document.getElementById('poster-search-results').innerHTML = '';
+        document.getElementById('poster-search-empty')?.classList.add('hidden');
+        document.getElementById('poster-search-modal')?.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closePosterSearchModal() {
+        document.getElementById('poster-search-modal')?.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+
+    async function runPosterSearch() {
+        const language = document.getElementById('poster-search-language')?.value || 'all';
+        const btn = document.getElementById('poster-search-submit');
+        const resultsEl = document.getElementById('poster-search-results');
+        posterSearchResults = [];
+        clearPosterSelection();
+        setPosterSearchError('');
+        setPosterSearchState('Loading poster results from TMDB...', true);
+        document.getElementById('poster-search-empty')?.classList.add('hidden');
+        resultsEl.innerHTML = '';
+        if (btn) btn.disabled = true;
+
+        try {
+            const params = new URLSearchParams({
+                media_type: mediaType,
+                tmdb_id: String(tmdbId),
+                db_index: String(dbIndex),
+                language,
+            });
+            const response = await fetch(`/api/media/posters/search?${params.toString()}`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                setPosterSearchState('', false);
+                setPosterSearchError(data.detail || 'Failed to load poster results.');
+                return;
+            }
+
+            posterSearchResults = data.results || [];
+            if (!posterSearchResults.length) {
+                setPosterSearchState('No poster results found.', true);
+                document.getElementById('poster-search-empty')?.classList.remove('hidden');
+                return;
+            }
+
+            setPosterSearchState(`Found ${posterSearchResults.length} poster result${posterSearchResults.length > 1 ? 's' : ''}.`, true);
+            resultsEl.innerHTML = posterSearchResults.map((item, index) => `
+                <button
+                    type="button"
+                    id="poster-result-${index}"
+                    class="match-card text-left w-full"
+                    data-index="${index}"
+                >
+                    <img
+                        src="${escapeHtml(item.thumbnail || item.preview || item.url || '/static/placeholder.jpg')}"
+                        alt="Poster result ${index + 1}"
+                        class="w-full aspect-[2/3] object-cover rounded-2xl border border-hairline"
+                        onerror="this.src='/static/placeholder.jpg'"
+                    >
+                    <div class="mt-3 space-y-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="pill">${escapeHtml(item.language_label || 'Unknown')}</span>
+                            ${item.width && item.height ? `<span class="pill">${escapeHtml(`${item.width}×${item.height}`)}</span>` : ''}
+                            ${item.vote_count ? `<span class="pill">Votes ${escapeHtml(item.vote_count)}</span>` : ''}
+                        </div>
+                        <p class="muted text-xs break-all">${escapeHtml(item.url || '')}</p>
+                    </div>
+                </button>
+            `).join('');
+
+            document.querySelectorAll('#poster-search-results .match-card').forEach((card) => {
+                card.addEventListener('click', () => {
+                    const index = Number(card.dataset.index);
+                    selectPosterResult(index);
+                });
+            });
+        } catch (error) {
+            console.error('Poster search failed:', error);
+            setPosterSearchState('', false);
+            setPosterSearchError('Failed to load poster results. Please try again.');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function confirmPosterSelection() {
+        if (!selectedPosterResult?.url) {
+            setPosterSearchError('Choose a poster first.');
+            return;
+        }
+        const btn = document.getElementById('poster-search-confirm-btn');
+        if (btn) btn.disabled = true;
+        setPosterSearchError('');
+        try {
+            const response = await fetch(`/api/media/update?tmdb_id=${tmdbId}&db_index=${dbIndex}&media_type=${mediaType}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ poster: selectedPosterResult.url })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.detail || 'Failed to save the selected poster.');
+            }
+            const posterInput = document.getElementById('poster');
+            if (posterInput) posterInput.value = selectedPosterResult.url;
+            applyPosterPreview(selectedPosterResult.url);
+            showSuccessMessage('Poster selected and saved successfully.');
+            closePosterSearchModal();
+        } catch (error) {
+            setPosterSearchError(error.message || 'Failed to save the selected poster.');
+            showErrorMessage(error.message || 'Failed to save the selected poster.');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function resetPosterUploadFields() {
+        const channel = document.getElementById('poster-upload-channel');
+        const file = document.getElementById('poster-upload-file');
+        const reference = document.getElementById('poster-reference-url');
+        const state = document.getElementById('poster-upload-state');
+        if (channel) {
+            channel.innerHTML = subtitleChannelOptions();
+            channel.disabled = !subtitleChannels.length;
+        }
+        if (file) file.value = '';
+        if (reference) reference.value = document.getElementById('poster')?.value?.trim() || '';
+        if (state) {
+            state.textContent = '';
+            state.classList.add('hidden');
+        }
+        setPosterModalNotice('', '');
+    }
+
+    async function openPosterModal() {
+        await loadSubtitleChannels();
+        resetPosterUploadFields();
+        document.getElementById('poster-modal')?.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closePosterModal() {
+        document.getElementById('poster-modal')?.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+
+    async function submitPosterUpload() {
+        const btn = document.getElementById('poster-submit');
+        const channel = document.getElementById('poster-upload-channel');
+        const file = document.getElementById('poster-upload-file');
+        const reference = document.getElementById('poster-reference-url');
+        const state = document.getElementById('poster-upload-state');
+
+        const chosenChannel = channel?.value?.trim() || '';
+        const pickedFile = file?.files?.[0];
+        if (!chosenChannel) {
+            setPosterModalNotice('error', 'Choose a target channel first.');
+            return;
+        }
+        if (!pickedFile) {
+            setPosterModalNotice('error', 'Choose a poster image first.');
+            return;
+        }
+
+        btn.disabled = true;
+        setPosterModalNotice('', '');
+        if (state) {
+            state.textContent = 'Uploading poster to the selected channel...';
+            state.classList.remove('hidden');
+        }
+        try {
+            const form = new FormData();
+            form.append('media_type', mediaType);
+            form.append('tmdb_id', String(tmdbId));
+            form.append('db_index', String(dbIndex));
+            form.append('channel_id', chosenChannel);
+            form.append('reference_url', reference?.value?.trim() || '');
+            form.append('file', pickedFile);
+
+            const res = await fetch('/api/media/poster/upload', {
+                method: 'POST',
+                body: form,
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Failed to upload poster');
+            if (data.poster) {
+                const posterInput = document.getElementById('poster');
+                if (posterInput) posterInput.value = data.poster;
+                applyPosterPreview(data.poster);
+            }
+            setPosterModalNotice('success', data.message || 'Poster uploaded and linked successfully.');
+            showSuccessMessage(data.message || 'Poster uploaded and linked successfully.');
+            closePosterModal();
+        } catch (e) {
+            setPosterModalNotice('error', e.message || 'Failed to upload poster.');
+            showErrorMessage(e.message || 'Failed to upload poster.');
+        } finally {
+            btn.disabled = false;
+            if (state) {
+                state.textContent = '';
+                state.classList.add('hidden');
+            }
+        }
+    }
+
+    function setSubtitleSearchError(message = '') {
+        const el = document.getElementById('subtitle-search-error');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !message);
+    }
+
+    function setSubtitleSearchSuccess(message = '') {
+        const el = document.getElementById('subtitle-search-success');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !message);
+    }
+
+    function setSubtitleSearchState(message = '', visible = false) {
+        const el = document.getElementById('subtitle-search-state');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !visible);
     }
 
     function addSubtitleRow(url = '') {
@@ -1976,6 +2474,243 @@
         } catch (e) {}
     }
 
+    async function loadSubtitleChannels() {
+        if (subtitleChannels.length) return;
+        try {
+            const res = await fetch('/api/media/subtitles/channels');
+            const data = await res.json().catch(() => ({}));
+            subtitleChannels = data.channels || [];
+        } catch (e) {}
+    }
+
+    function setSubtitleModalNotice(kind, message = '') {
+        const err = document.getElementById('sub-modal-error');
+        const ok = document.getElementById('sub-modal-success');
+        if (err) { err.classList.add('hidden'); err.textContent = ''; }
+        if (ok) { ok.classList.add('hidden'); ok.textContent = ''; }
+        if (!message) return;
+        const target = kind === 'success' ? ok : err;
+        if (!target) return;
+        target.textContent = message;
+        target.classList.remove('hidden');
+    }
+
+    function resetSubtitleUploadFields() {
+        const file = document.getElementById('sub-upload-file');
+        const state = document.getElementById('sub-upload-state');
+        const channel = document.getElementById('sub-upload-channel');
+        const lang = document.getElementById('sub-upload-lang');
+        if (file) file.value = '';
+        if (state) {
+            state.textContent = '';
+            state.classList.add('hidden');
+        }
+        if (channel) {
+            channel.innerHTML = subtitleChannelOptions();
+            channel.disabled = !subtitleChannels.length;
+        }
+        if (lang) lang.innerHTML = subtitleLangOptions();
+        setSubtitleModalNotice('', '');
+    }
+
+    function clearSubtitleSearchSelection() {
+        selectedSubtitleResult = null;
+        const wrap = document.getElementById('subtitle-search-confirm');
+        if (wrap) wrap.classList.add('hidden');
+        const picked = document.getElementById('subtitle-search-picked');
+        if (picked) picked.textContent = '';
+        const channel = document.getElementById('subtitle-search-channel');
+        if (channel) {
+            channel.innerHTML = subtitleChannelOptions();
+            channel.disabled = !subtitleChannels.length;
+        }
+        const lang = document.getElementById('subtitle-search-language');
+        if (lang) lang.value = '';
+    }
+
+    function resetSubtitleSearchModal() {
+        subtitleSearchResults = [];
+        setSubtitleSearchError('');
+        setSubtitleSearchSuccess('');
+        setSubtitleSearchState('', false);
+        const results = document.getElementById('subtitle-search-results');
+        const empty = document.getElementById('subtitle-search-empty');
+        if (results) results.innerHTML = '';
+        if (empty) empty.classList.add('hidden');
+        clearSubtitleSearchSelection();
+        if (mediaType === 'tv') {
+            const season = document.getElementById('search-sub-season');
+            const episode = document.getElementById('search-sub-episode');
+            if (season) season.value = '';
+            if (episode) episode.value = '';
+        }
+    }
+
+    async function openSubtitleSearchModal() {
+        await Promise.all([loadSubtitleChannels(), loadSubtitleLanguages()]);
+        resetSubtitleSearchModal();
+        document.getElementById('subtitle-search-modal').classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeSubtitleSearchModal() {
+        document.getElementById('subtitle-search-modal')?.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+
+    function renderSubtitleSearchResults(items) {
+        const results = document.getElementById('subtitle-search-results');
+        const empty = document.getElementById('subtitle-search-empty');
+        if (!results || !empty) return;
+
+        if (!items.length) {
+            results.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+        results.innerHTML = items.map((item, index) => `
+            <div class="quality-row rounded-2xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="pill">${escapeHtml(item.lang_label || item.lang_code || 'Unknown')}</span>
+                        ${item.quality ? `<span class="pill">${escapeHtml(item.quality)}</span>` : ''}
+                        ${item.hearing_impaired ? '<span class="pill">HI</span>' : ''}
+                        ${item.match_kind === 'season_pack' ? '<span class="pill">Complete Season</span>' : ''}
+                    </div>
+                    <p class="text-sm text-text mt-2 break-all font-semibold">${escapeHtml(item.file_name || item.release_name || 'Subtitle result')}</p>
+                    <p class="muted text-xs mt-1 break-all">${escapeHtml(item.release_name || '')}</p>
+                    <p class="muted text-xs mt-2">${escapeHtml(item.source_line || `Source: ${item.provider_label || item.provider || 'Unknown'}`)}</p>
+                </div>
+                <button type="button" onclick="selectSubtitleSearchResult(${index})" class="btn-ui btn-success w-full lg:w-auto">Choose</button>
+            </div>
+        `).join('');
+    }
+
+    function selectSubtitleSearchResult(index) {
+        selectedSubtitleResult = subtitleSearchResults[index] || null;
+        if (!selectedSubtitleResult) return;
+        const wrap = document.getElementById('subtitle-search-confirm');
+        const picked = document.getElementById('subtitle-search-picked');
+        const channel = document.getElementById('subtitle-search-channel');
+        const lang = document.getElementById('subtitle-search-language');
+        if (picked) {
+            picked.textContent = `${selectedSubtitleResult.provider_label || selectedSubtitleResult.provider} • ${selectedSubtitleResult.lang_label || selectedSubtitleResult.lang_code || 'Unknown'} • ${selectedSubtitleResult.release_name || selectedSubtitleResult.file_name || 'Subtitle'}`;
+        }
+        if (channel) {
+            channel.innerHTML = subtitleChannelOptions();
+            channel.disabled = !subtitleChannels.length;
+        }
+        if (lang) lang.value = selectedSubtitleResult.lang_label || selectedSubtitleResult.lang_code || 'Unknown';
+        if (wrap) {
+            wrap.classList.remove('hidden');
+            wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        setSubtitleSearchError('');
+        setSubtitleSearchSuccess('Subtitle selected. Scroll below to choose the target channel and confirm the download.');
+        showSuccessMessage('Subtitle selected. Continue below to confirm the download.');
+    }
+
+    async function runSubtitleSearch() {
+        const btn = document.getElementById('search-sub-submit');
+        let season = '', episode = '';
+        if (mediaType === 'tv') {
+            season = document.getElementById('search-sub-season').value.trim();
+            episode = document.getElementById('search-sub-episode').value.trim();
+            if (season === '') {
+                setSubtitleSearchError('Season is required.');
+                return;
+            }
+        }
+
+        btn.disabled = true;
+        subtitleSearchResults = [];
+        clearSubtitleSearchSelection();
+        setSubtitleSearchError('');
+        setSubtitleSearchSuccess('');
+        setSubtitleSearchState('Searching configured subtitle providers...', true);
+
+        try {
+            const params = new URLSearchParams({
+                media_type: mediaType,
+                tmdb_id: String(tmdbId),
+                db_index: String(dbIndex),
+            });
+            if (mediaType === 'tv') {
+                params.set('season', String(Number(season)));
+                if (episode !== '') {
+                    params.set('episode', String(Number(episode)));
+                }
+            }
+            const res = await fetch(`/api/media/subtitles/search?${params.toString()}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Failed to search subtitles');
+            subtitleSearchResults = data.results || [];
+            renderSubtitleSearchResults(subtitleSearchResults);
+            setSubtitleSearchState(subtitleSearchResults.length ? `Found ${subtitleSearchResults.length} subtitle result(s).` : 'No subtitle results found.', true);
+        } catch (e) {
+            renderSubtitleSearchResults([]);
+            setSubtitleSearchError(e.message || 'Failed to search subtitles.');
+            setSubtitleSearchState('', false);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function confirmSubtitleImport() {
+        const btn = document.getElementById('subtitle-search-confirm-btn');
+        const channel = document.getElementById('subtitle-search-channel');
+        if (!selectedSubtitleResult) {
+            setSubtitleSearchError('Choose a subtitle result first.');
+            return;
+        }
+        if (!channel?.value?.trim()) {
+            setSubtitleSearchError('Choose a target channel first.');
+            return;
+        }
+
+        let season = null;
+        let episode = null;
+        if (mediaType === 'tv') {
+            season = Number(document.getElementById('search-sub-season').value.trim());
+            const rawEpisode = document.getElementById('search-sub-episode').value.trim();
+            episode = rawEpisode === '' ? null : Number(rawEpisode);
+        }
+
+        btn.disabled = true;
+        setSubtitleSearchError('');
+        setSubtitleSearchSuccess('');
+        setSubtitleSearchState('Downloading the selected subtitle and saving it to Telegram...', true);
+        try {
+            const payload = {
+                media_type: mediaType,
+                tmdb_id: tmdbId,
+                db_index: dbIndex,
+                channel_id: channel.value.trim(),
+                lang_code: selectedSubtitleResult.lang_code,
+                season,
+                episode,
+                result: selectedSubtitleResult,
+            };
+            const res = await fetch('/api/media/subtitles/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Failed to import subtitle');
+            showSuccessMessage(data.message || 'Subtitle downloaded and added to the channel successfully.');
+            closeSubtitleSearchModal();
+            loadSubtitles();
+        } catch (e) {
+            setSubtitleSearchError(e.message || 'Failed to import subtitle.');
+        } finally {
+            btn.disabled = false;
+            setSubtitleSearchState('', false);
+        }
+    }
+
     async function loadSubtitles() {
         const listEl = document.getElementById('subtitle-list');
         const emptyEl = document.getElementById('subtitle-empty');
@@ -1988,7 +2723,12 @@
             emptyEl.classList.add('hidden');
             listEl.innerHTML = subs.map(s => {
                 const pad = n => String(n).padStart(2, '0');
-                const where = (s.media_type === 'tv' && s.season) ? `S${pad(s.season)}E${pad(s.episode)} · ` : '';
+                let where = '';
+                if (s.media_type === 'tv' && s.season && s.episode) {
+                    where = `S${pad(s.season)}E${pad(s.episode)} · `;
+                } else if (s.media_type === 'tv' && s.season) {
+                    where = `Season ${pad(s.season)} Pack · `;
+                }
                 return `<div class="quality-row rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div class="min-w-0 flex-1">
                         <div class="flex flex-wrap items-center gap-2">
@@ -2005,13 +2745,15 @@
         }
     }
 
-    function openSubtitleModal() {
+    async function openSubtitleModal() {
+        await Promise.all([loadSubtitleLanguages(), loadSubtitleChannels()]);
         if (mediaType === 'tv') {
             document.getElementById('sub-season').value = '';
             document.getElementById('sub-episode').value = '';
         }
         document.getElementById('subtitle-rows').innerHTML = '';
         addSubtitleRow();
+        resetSubtitleUploadFields();
         document.getElementById('subtitle-modal').classList.remove('hidden');
         document.body.style.overflow = 'hidden';
     }
@@ -2023,12 +2765,67 @@
 
     async function submitSubtitles() {
         const btn = document.getElementById('sub-submit');
+        const fileInput = document.getElementById('sub-upload-file');
+        const channelInput = document.getElementById('sub-upload-channel');
+        const langInput = document.getElementById('sub-upload-lang');
+        const stateEl = document.getElementById('sub-upload-state');
         let season = '', episode = '';
         if (mediaType === 'tv') {
             season = document.getElementById('sub-season').value.trim();
             episode = document.getElementById('sub-episode').value.trim();
             if (season === '' || episode === '') { showErrorMessage('Season and episode are required.'); return; }
         }
+        const pickedFile = fileInput?.files?.[0];
+        const selectedChannel = channelInput?.value?.trim() || '';
+        const selectedLang = langInput?.value || '';
+
+        if (pickedFile) {
+            if (!selectedChannel) {
+                setSubtitleModalNotice('error', 'Choose a target channel first.');
+                return;
+            }
+            btn.disabled = true;
+            setSubtitleModalNotice('', '');
+            if (stateEl) {
+                stateEl.textContent = 'Uploading subtitle to the selected channel...';
+                stateEl.classList.remove('hidden');
+            }
+            try {
+                const form = new FormData();
+                form.append('media_type', mediaType);
+                form.append('tmdb_id', String(tmdbId));
+                form.append('db_index', String(dbIndex));
+                form.append('channel_id', selectedChannel);
+                form.append('lang_code', selectedLang);
+                if (mediaType === 'tv') {
+                    form.append('season', String(Number(season)));
+                    form.append('episode', String(Number(episode)));
+                }
+                form.append('file', pickedFile);
+
+                const res = await fetch('/api/media/subtitles/upload', {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || 'Failed to upload subtitle');
+                setSubtitleModalNotice('success', data.message || 'Subtitle added to the channel successfully.');
+                showSuccessMessage(data.message || 'Subtitle added to the channel successfully.');
+                closeSubtitleModal();
+                loadSubtitles();
+            } catch (e) {
+                setSubtitleModalNotice('error', e.message || 'Failed to upload subtitle.');
+                showErrorMessage(e.message || 'Failed to upload subtitle.');
+            } finally {
+                btn.disabled = false;
+                if (stateEl) {
+                    stateEl.textContent = '';
+                    stateEl.classList.add('hidden');
+                }
+            }
+            return;
+        }
+
         const items = [...document.querySelectorAll('#subtitle-rows [data-sub-row]')].map(r => {
             const url = r.querySelector('.sub-url').value.trim();
             if (!url) return null;
@@ -2036,7 +2833,11 @@
             if (mediaType === 'tv') { item.season = Number(season); item.episode = Number(episode); }
             return item;
         }).filter(Boolean);
-        if (!items.length) { showErrorMessage('Paste at least one subtitle link.'); return; }
+        if (!items.length) {
+            setSubtitleModalNotice('error', 'Upload a subtitle file or paste at least one Telegram subtitle link.');
+            showErrorMessage('Upload a subtitle file or paste at least one Telegram subtitle link.');
+            return;
+        }
 
         btn.disabled = true;
         try {
@@ -2046,10 +2847,12 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || 'Failed to add subtitle');
+            setSubtitleModalNotice('success', data.message || 'Subtitle added.');
             showSuccessMessage(data.message || 'Subtitle added.');
             closeSubtitleModal();
             loadSubtitles();
         } catch (e) {
+            setSubtitleModalNotice('error', e.message || 'Failed to add subtitle.');
             showErrorMessage(e.message || 'Failed to add subtitle.');
         } finally {
             btn.disabled = false;
@@ -2121,7 +2924,10 @@
         const backLink = document.getElementById('back-to-list');
         if (backLink) backLink.href = manageListUrl();
         if (document.getElementById('subtitle-list')) {
-            loadSubtitleLanguages().then(loadSubtitles);
+            Promise.all([loadSubtitleLanguages(), loadSubtitleChannels()]).then(() => {
+                resetSubtitleUploadFields();
+                loadSubtitles();
+            });
         }
     });
 </script>

@@ -199,6 +199,25 @@ def list_languages() -> list:
     return [{"code": code, "label": label} for code, label, _ in _LANGUAGES]
 
 
+def language_label(code: str) -> str:
+    return _label_for(code)
+
+
+def provider_language_value(code: str, provider: str) -> str:
+    code = str(code or "").strip().lower()
+    provider = str(provider or "").strip().lower()
+    for lang_code, label, aliases in _LANGUAGES:
+        if lang_code != code:
+            continue
+        if provider == "subsource":
+            return label.lower()
+        two_letter = next((alias for alias in aliases if len(alias) == 2), None)
+        if provider in {"subdl", "opensubtitles"}:
+            return (two_letter or code).lower()
+        return code
+    return code
+
+
 def _label_for(code: str) -> str:
     code = (code or "und").lower()
     return next((label for c, label, _ in _LANGUAGES if c == code), "Unknown")
@@ -235,7 +254,7 @@ async def resolve_subtitle_message(client, url: str = None, chat_id=None, msg_id
     }
 
 
-async def manual_ingest_subtitle(imdb_id, media_type, season, episode, lang_code, chat_id, msg_id, name) -> dict:
+async def manual_ingest_subtitle(imdb_id, media_type, season, episode, lang_code, chat_id, msg_id, name, source: str = "manual") -> dict:
     channel = int(str(chat_id).replace("-100", ""))
     msg_id = int(msg_id)
     code = (lang_code or "und").lower()
@@ -250,7 +269,7 @@ async def manual_ingest_subtitle(imdb_id, media_type, season, episode, lang_code
         "chat_id": channel,
         "msg_id": msg_id,
         "encoded": await encode_string({"chat_id": channel, "msg_id": msg_id}),
-        "source": "manual",
+        "source": str(source or "manual").lower(),
         "added_at": datetime.utcnow(),
     }
     await db.dbs["tracking"]["subtitles"].update_one(

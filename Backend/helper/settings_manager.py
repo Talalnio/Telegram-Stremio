@@ -3,7 +3,6 @@ from __future__ import annotations
 import secrets
 from typing import Any, Dict, List
 
-import Backend.pyrofork.bot as botmod
 from Backend.config import Telegram
 from Backend.helper.passwords import hash_password
 from Backend.logger import LOGGER
@@ -15,6 +14,12 @@ _DEFAULTS: Dict[str, Any] = {
     "hide_catalog": False,
     "auth_channels": [],
     "tmdb_api": "",
+    "metadata_source": "auto",
+    "metadata_language": "en",
+    "subtitle_search_languages": ["eng"],
+    "subdl_api_key": "",
+    "subsource_api_key": "",
+    "opensubtitles_api_key": "",
     "base_url": "",
     "upstream_repo": "https://github.com/weebzone/Telegram-Stremio",
     "upstream_branch": "master",
@@ -148,6 +153,37 @@ class Settings:
     @property
     def tmdb_api(self) -> str:
         return str(self._d.get("tmdb_api") or "")
+
+    @property
+    def metadata_source(self) -> str:
+        value = str(self._d.get("metadata_source") or "auto").strip().lower()
+        return value if value in {"auto", "cinemeta", "tmdb"} else "auto"
+
+    @property
+    def metadata_language(self) -> str:
+        value = str(self._d.get("metadata_language") or "en").strip().lower()
+        return value if value in {"en", "ar"} else "en"
+
+    @property
+    def subtitle_search_languages(self) -> List[str]:
+        values = []
+        for value in (self._d.get("subtitle_search_languages") or []):
+            code = str(value or "").strip().lower()
+            if code:
+                values.append(code)
+        return values or ["eng"]
+
+    @property
+    def subdl_api_key(self) -> str:
+        return str(self._d.get("subdl_api_key") or "").strip()
+
+    @property
+    def subsource_api_key(self) -> str:
+        return str(self._d.get("subsource_api_key") or "").strip()
+
+    @property
+    def opensubtitles_api_key(self) -> str:
+        return str(self._d.get("opensubtitles_api_key") or "").strip()
 
     @property
     def base_url(self) -> str:
@@ -307,12 +343,13 @@ class SettingsManager:
 
         #----- Global Search requires a Userbot session; enforce it server-side
         if merged.get("global_search"):
-            if botmod.Userbot is None:
+            if not Telegram.USER_SESSION_STRING:
                 merged["global_search"] = False
                 LOGGER.warning(
-                    "SettingsManager: rejected global_search=True — no Userbot session connected."
+                    "SettingsManager: rejected global_search=True — "
+                    "USER_SESSION_STRING is not configured."
                 )
-                results["global_search"] = "rejected — connect a Telegram session in Settings first"
+                results["global_search"] = "rejected — no Userbot session configured"
 
         #----- Phase 1: validate/apply changes that can abort the save
         old_extra = old.get("extra_databases") or []
@@ -360,6 +397,14 @@ class SettingsManager:
         proxy_keys = {"http_proxy_url", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "mediaflow_password"}
         if any(old.get(k) != new.get(k) for k in proxy_keys):
             results["proxy"] = "updated — applies to next outbound request"
+
+        metadata_keys = {"metadata_source", "metadata_language"}
+        if any(old.get(k) != new.get(k) for k in metadata_keys):
+            results["metadata"] = "updated — applies to newly added items and future rescans"
+
+        subtitle_keys = {"subtitle_search_languages", "subdl_api_key", "subsource_api_key", "opensubtitles_api_key"}
+        if any(old.get(k) != new.get(k) for k in subtitle_keys):
+            results["subtitles"] = "updated — applies to new subtitle searches immediately"
 
         #----- Subscription enabled/disabled: start or stop the checker task
         if old.get("subscription") != new.get("subscription"):
