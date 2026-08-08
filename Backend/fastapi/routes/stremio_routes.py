@@ -219,7 +219,7 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     try:
         parsed = PTN.parse(filename)
     except Exception:
-        return (f"TG {quality}", f"📁 {filename}\n{size_emoji} {size}")
+        return (f"[TG⚡]  {quality}", f"📁 {filename}\n{size_emoji} {size}")
 
     codec_parts = []
     if parsed.get("codec"):
@@ -261,11 +261,11 @@ def parse_size_to_bytes(size_str: str) -> int:
 
 def get_resolution_priority(stream_name: str) -> int:
     resolution_map = {
-        "2160p": 2160, "4k": 2160, "uhd": 2160,
-        "1080p": 1080, "fhd": 1080,
-        "720p": 720, "hd": 720,
-        "480p": 480, "sd": 480,
-        "360p": 360,
+        "[2160p]": 2160, "4k": 2160, "uhd": 2160,
+        "[1080p]": 1080, "fhd": 1080,
+        "[720p]": 720, "hd": 720,
+        "[480p]": 480, "sd": 480,
+        "[360p]": 360,
     }
     for res_key, res_value in resolution_map.items():
         if res_key in stream_name.lower():
@@ -388,7 +388,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
 
 
     addon_name = ADDON_NAME
-    addon_desc = "Streams movies and series from your Telegram."
+    addon_desc = "High-quality Movies • TV Shows • Anime"
     addon_version = ADDON_VERSION
 
     #----- Show expiry info in the addon: token's own expiry first, else the subscription
@@ -405,7 +405,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             expiry_str = expiry_obj.strftime("%d %b %Y").lstrip("0")
             addon_desc = (
                 f"📅 Access active until {expiry_str}.\n"
-                f"Streams movies and series from your Telegram."
+                f"High-quality Movies • TV Shows • Anime"
             )
             epoch_tag = format(int(expiry_obj.timestamp()) & 0xFFFF, "x")
             addon_version = f"{ADDON_VERSION}-{epoch_tag}"
@@ -416,7 +416,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         "id": f"telegram.media.{token[:8]}",
         "version": addon_version,
         "name": addon_name,
-        "logo": "https://i.postimg.cc/XqWnmDXr/Picsart-25-10-09-08-09-45-867.png",
+        "logo": "https://i.ibb.co/qYxbP3TM/IMG-0283.png",
         "description": addon_desc,
         "types": ["movie", "series"],
         "resources": resources,
@@ -628,7 +628,7 @@ async def _global_streams_for(token: str, imdb_id: str, media_type: str, season_
     for r in global_results:
         is_split = bool(r.get("is_split"))
         _, stream_title = format_stream_details(r["title"], r["quality"], r["size"], is_split=is_split)
-        stream_name = f"🌐 GLOBAL {r['quality']}"
+        stream_name = f"TG🌐 {r['quality']}"
         stream_title = f"{stream_title}\n📡 {r['source_chat']}"
         if is_split:
             kind = "zip parts" if r.get("is_zip") else "parts"
