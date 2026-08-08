@@ -14,6 +14,10 @@ from Backend.config import Telegram
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 
+def _currency_symbol(code):
+    return {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "AUD": "A$", "CAD": "C$", "SGD": "S$", "AED": "د.إ", "BRL": "R$"}.get((code or "INR").upper(), f"{(code or 'INR')} ")
+
+
 
 #----- Configured approvers, falling back to the owner
 def _approver_ids() -> list:
@@ -30,12 +34,13 @@ async def _resolve_target_info(client: Client, target_user_id: int):
 
 
 #----- Formatted plan/user block shared by approve and reject captions
-def _plan_info_text(mention: str, username_str: str, user_id: int, duration, price) -> str:
+def _plan_info_text(mention: str, username_str: str, user_id: int, duration, price, currency="INR") -> str:
+    sym = _currency_symbol(currency)
     return (
         f"👤 <b>User:</b> {mention}\n"
         f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"🔗 <b>Username:</b> {username_str}\n\n"
-        f"📦 <b>Plan:</b> {duration} days (${price})"
+        f"📦 <b>Plan:</b> {duration} days ({sym}{price})"
     )
 
 
@@ -88,24 +93,24 @@ async def plan_selection(client: Client, callback_query: CallbackQuery):
 
     text = (
         f"<b>✅ Plan Selected: {plan['days']} Days</b>\n\n"
-        f"<b>💰 Price:</b> ${plan['price']}\n"
+        f"<b>💰 Price:</b> {_currency_symbol(plan.get('currency'))}{plan['price']}\n"
         f"<b>📅 Expiry (if approved now):</b> {expiry_str}\n\n"
         f"<b>📋 How to Pay:</b>\n"
     )
-    text += f"{payment_instructions}\n\n" if payment_instructions else f"Pay ${plan['price']} to the admin.\n\n"
+    text += f"{payment_instructions}\n\n" if payment_instructions else f"Pay {_currency_symbol(plan.get('currency'))}{plan['price']} to the admin.\n\n"
     text += (
         "<b>After paying:</b> send your payment screenshot directly here "
         "(in this chat). The admin will review and activate your subscription."
     )
 
-    await db.set_pending_payment(user_id, int(duration), 0, price=plan.get("price", 0))
+    await db.set_pending_payment(user_id, int(duration), 0, price=plan.get("price", 0), currency=plan.get("currency", "INR"))
 
     #----- Prefer DMing the user so the private screenshot handler can pick it up
     dm_sent = False
     try:
         if payment_qr_url:
             try:
-                await client.send_photo(chat_id=user_id, photo=payment_qr_url, caption=f"📷 Scan to pay ${plan['price']}")
+                await client.send_photo(chat_id=user_id, photo=payment_qr_url, caption=f"📷 Scan to pay {_currency_symbol(plan.get('currency'))}{plan['price']}")
             except Exception as qe:
                 LOGGER.warning(f"Could not send payment QR to {user_id}: {qe}")
         await client.send_message(chat_id=user_id, text=text, reply_markup=ForceReply(selective=True))
@@ -150,6 +155,7 @@ async def handle_payment_screenshot(client: Client, message: Message):
         pending = user["pending_payment"]
         duration = pending.get("duration", "?")
         price = pending.get("price", "?")
+        currency = pending.get("currency", "INR")
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Approve", callback_data=f"approve_{sender_id}"),
@@ -166,7 +172,7 @@ async def handle_payment_screenshot(client: Client, message: Message):
             f"<b>🔗 Username:</b> {username_str}\n\n"
             f"<b>📦 Plan Details:</b>\n"
             f"  • Duration: <b>{duration} days</b>\n"
-            f"  • Price: <b>${price}</b>\n\n"
+            f"  • Price: <b>{_currency_symbol(currency)}{price}</b>\n\n"
             f"Please review the screenshot above and approve or reject."
         )
 
@@ -178,7 +184,7 @@ async def handle_payment_screenshot(client: Client, message: Message):
             except Exception as e:
                 LOGGER.error(f"Failed to forward screenshot to approver {approver_id}: {e}")
 
-        await db.set_pending_payment(sender_id, duration, message.id, price=price, admin_messages=admin_messages)
+        await db.set_pending_payment(sender_id, duration, message.id, price=price, admin_messages=admin_messages, currency=currency)
 
         if admin_messages:
             await message.reply_text(

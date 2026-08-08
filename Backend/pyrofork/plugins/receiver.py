@@ -38,6 +38,10 @@ def _is_supported_media(message: Message) -> bool:
         candidate = message.caption or message.document.file_name or ""
         if parse_split_info(candidate):
             return True
+        # Single (non-split) STORED zip archives containing a video
+        name = (message.document.file_name or candidate or "").lower()
+        if name.endswith(".zip") and not parse_split_info(name):
+            return True
     return False
 
 

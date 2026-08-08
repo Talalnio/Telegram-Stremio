@@ -817,6 +817,13 @@ async def metadata(filename: str, channel: int, msg_id, override_id: str = None,
         encoded_string = None
 
     group_key = f"{channel}:{quality}:{split_info[0]}" if split_info else None
+    # Single (non-split) .zip archives: treat as a one-part zip so streaming
+    # can extract and seek the inner STORED video the same way as .zip.001 sets.
+    if group_key is None and filename and filename.lower().rstrip().endswith(".zip"):
+        from Backend.helper.split_files import _normalize
+        base = filename.rsplit(".", 1)[0]
+        group_key = f"{channel}:{quality}:{_normalize(base)}.zip"
+        part_number = 1
     anime_channel = _is_anime_channel(channel)
 
     try:

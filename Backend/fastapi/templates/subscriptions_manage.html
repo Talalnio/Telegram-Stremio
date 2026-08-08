@@ -521,8 +521,23 @@
             </div>
 
             <div class="modal-field">
-                <label for="plan-price">Price ($)</label>
+                <label for="plan-price">Price</label>
                 <input type="number" id="plan-price" class="glass-input" required min="0" step="0.01">
+            </div>
+            <div>
+                <label for="plan-currency">Currency</label>
+                <select id="plan-currency" class="glass-input">
+                    <option value="INR">INR (₹)</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                    <option value="JPY">JPY (¥)</option>
+                    <option value="AUD">AUD (A$)</option>
+                    <option value="CAD">CAD (C$)</option>
+                    <option value="SGD">SGD (S$)</option>
+                    <option value="AED">AED (د.إ)</option>
+                    <option value="BRL">BRL (R$)</option>
+                </select>
             </div>
 
             <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
@@ -637,7 +652,7 @@
             container.innerHTML = plans.map(p => `
                 <div class="plan-card p-5 sm:p-6">
                     <div class="plan-actions absolute right-4 top-4 flex gap-2">
-                        <button onclick="openPlanModal('${p._id}', ${p.days}, ${p.price})"
+                        <button onclick="openPlanModal('${p._id}', ${p.days}, ${p.price}, '${p.currency || 'INR'}')"
                             class="glass-btn rounded-full w-9 h-9 flex items-center justify-center" title="Edit plan">
                             <i class="fas fa-pen text-sm"></i>
                         </button>
@@ -655,7 +670,8 @@
 
                         <div class="min-w-0">
                             <div class="text-sm font-semibold section-muted">${p.days} Days Plan</div>
-                            <div class="mt-1 text-3xl font-extrabold section-title tracking-tight">$${p.price}</div>
+                            <div class="mt-1 text-3xl font-extrabold section-title tracking-tight">${currencySymbol(p.currency)}${p.price}</div>
+                    <div class="text-xs text-soft mt-0.5">${(p.currency || 'INR').toUpperCase()}</div>
                             <div class="mt-3 inline-flex items-center gap-2 text-xs font-bold rounded-full px-3 py-1"
                                  style="background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-sec); border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);">
                                 <i class="fas fa-bolt" style="color: var(--accent);"></i>
@@ -675,10 +691,17 @@
         }
     }
 
-    function openPlanModal(id = '', days = '', price = '') {
+    function currencySymbol(code) {
+        const map = {INR:'₹',USD:'$',EUR:'€',GBP:'£',JPY:'¥',AUD:'A$',CAD:'C$',SGD:'S$',AED:'د.إ',BRL:'R$'};
+        return map[(code || 'INR').toUpperCase()] || ((code || 'INR') + ' ');
+    }
+
+    function openPlanModal(id = '', days = '', price = '', currency = 'INR') {
         document.getElementById('plan-id').value = id;
         document.getElementById('plan-days').value = days;
         document.getElementById('plan-price').value = price;
+        const cur = document.getElementById('plan-currency');
+        if (cur) cur.value = (currency || 'INR').toUpperCase();
         document.getElementById('plan-modal-title').innerText = id ? 'Edit Plan' : 'Add New Plan';
 
         const modal = document.getElementById('plan-modal');
@@ -700,7 +723,8 @@
         const id = document.getElementById('plan-id').value;
         const payload = {
             days: parseInt(document.getElementById('plan-days').value),
-            price: parseFloat(document.getElementById('plan-price').value)
+            price: parseFloat(document.getElementById('plan-price').value),
+            currency: (document.getElementById('plan-currency') || {}).value || 'INR'
         };
 
         try {

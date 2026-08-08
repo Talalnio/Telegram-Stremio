@@ -8,6 +8,10 @@ from Backend.config import Telegram
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 
+def _currency_symbol(code):
+    return {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "AUD": "A$", "CAD": "C$", "SGD": "S$", "AED": "د.إ", "BRL": "R$"}.get((code or "INR").upper(), f"{(code or 'INR')} ")
+
+
 
 #----- /start: hand out the Stremio addon link, gated by subscription state
 @Client.on_message(filters.command('start') & filters.private, group=10)
@@ -65,7 +69,7 @@ async def send_start_message(client: Client, message: Message):
                 )
 
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"{plan['days']} Days - ₹{plan['price']}", callback_data=f"plan_{plan['_id']}")]
+                [InlineKeyboardButton(f"{plan['days']} Days - {_currency_symbol(plan.get('currency'))}{plan['price']}", callback_data=f"plan_{plan['_id']}")]
                 for plan in plans
             ])
             return await message.reply_text(

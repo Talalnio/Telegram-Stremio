@@ -70,6 +70,7 @@ from Backend.helper.subtitles import (
     remove_subtitle,
     resolve_subtitle_message,
 )
+from Backend.helper.announcer import delete_announcement_async
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
 from Backend.pyrofork.bot import (
@@ -162,6 +163,8 @@ async def delete_media_api(
         media_type_formatted = "Movie" if media_type == "movie" else "Series"
         result = await db.delete_document(media_type_formatted, tmdb_id, db_index)
         if result:
+            # Remove matching announcement post from the announcement channel
+            delete_announcement_async(media_type, tmdb_id)
             return {"message": "Media deleted successfully"}
         else:
             raise HTTPException(status_code=404, detail="Media not found")
@@ -649,10 +652,11 @@ async def add_subscription_plan_api(payload: dict) -> dict:
     try:
         days = int(payload.get("days", 0))
         price = float(payload.get("price", 0.0))
+        currency = str(payload.get("currency") or "INR").upper().strip()
         if days <= 0 or price < 0:
             raise HTTPException(status_code=400, detail="Invalid plan parameters")
             
-        plan_id = await db.add_subscription_plan(days, price)
+        plan_id = await db.add_subscription_plan(days, price, currency)
         if plan_id:
             return {"status": "success", "message": "Plan added successfully", "plan_id": plan_id}
         else:
@@ -666,10 +670,11 @@ async def update_subscription_plan_api(plan_id: str, payload: dict) -> dict:
     try:
         days = int(payload.get("days", 0))
         price = float(payload.get("price", 0.0))
+        currency = str(payload.get("currency") or "INR").upper().strip()
         if days <= 0 or price < 0:
              raise HTTPException(status_code=400, detail="Invalid plan parameters")
              
-        success = await db.update_subscription_plan(plan_id, days, price)
+        success = await db.update_subscription_plan(plan_id, days, price, currency)
         if success:
              return {"status": "success", "message": "Plan updated successfully"}
         else:

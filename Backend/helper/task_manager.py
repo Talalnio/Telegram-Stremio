@@ -24,7 +24,6 @@ _FALLBACK_WORTHY = (
     ChannelPrivate,
     MessageDeleteForbidden,
     MessageAuthorRequired,
-    PeerIdInvalid,
     UserNotParticipant,
     RPCError,
 )
@@ -36,7 +35,14 @@ def _userbot_usable() -> bool:
     return botmod.Userbot is not None and not _userbot_session_dead
 
 
-#----- Edit a message caption via StreamBot, falling back to the Userbot
+async def _resolve_peer(client, chat_id) -> bool:
+    try:
+        await client.get_chat(chat_id)
+        return True
+    except Exception as e:
+        return False
+
+
 async def edit_message(chat_id: int, msg_id: int, new_caption: str):
     try:
         await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
@@ -50,6 +56,18 @@ async def edit_message(chat_id: int, msg_id: int, new_caption: str):
             return
         except Exception as e2:
             LOGGER.error(f"Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
+    except PeerIdInvalid as e:
+        if await _resolve_peer(StreamBot, chat_id):
+            try:
+                await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+                return
+            except Exception as e2:
+                LOGGER.error(f"Retry after peer resolve failed while editing {msg_id} in {chat_id}: {e2}")
+        if not _userbot_usable():
+            LOGGER.error(f"Error while editing message {msg_id} in {chat_id}: {e}")
+            return
+        LOGGER.info(f"[USERBOT] Fallback triggered: edit_message {msg_id} in {chat_id} (StreamBot: {e})")
+        await _userbot_edit(chat_id, msg_id, new_caption)
     except _FALLBACK_WORTHY as e:
         if not _userbot_usable():
             LOGGER.error(f"Error while editing message {msg_id} in {chat_id}: {e}")
@@ -72,6 +90,15 @@ async def _userbot_edit(chat_id: int, msg_id: int, new_caption: str):
             await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
         except Exception as e2:
             LOGGER.error(f"[USERBOT] Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
+    except PeerIdInvalid as e:
+        if await _resolve_peer(botmod.Userbot, chat_id):
+            try:
+                await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+                return
+            except Exception as e2:
+                LOGGER.error(f"[USERBOT] Retry after peer resolve failed while editing {msg_id} in {chat_id}: {e2}")
+                return
+        LOGGER.error(f"[USERBOT] Peer unresolved while editing {msg_id} in {chat_id}: {e}")
     except _SESSION_DEAD as e:
         _userbot_session_dead = True
         LOGGER.error(f"[USERBOT] Session invalid ({type(e).__name__}): {e}. Disabling Userbot fallback for this run.")
@@ -83,7 +110,6 @@ async def delete_message(chat_id: int, msg_id: int):
     await delete_messages_batch(chat_id, [msg_id])
 
 
-#----- Delete messages in batches, using the Userbot fallback for leftovers
 async def delete_messages_batch(chat_id: int, msg_ids: List[int]):
     if not msg_ids:
         return
@@ -123,6 +149,17 @@ async def _delete_chunk(client, client_label: str, chat_id: int, msg_ids: List[i
         except Exception as e2:
             LOGGER.error(f"[{client_label.upper()}] Retry after FloodWait failed in {chat_id}: {e2}")
             return msg_ids
+    except PeerIdInvalid as e:
+        if await _resolve_peer(client, chat_id):
+            try:
+                await client.delete_messages(chat_id=chat_id, message_ids=msg_ids)
+                LOGGER.info(f"[{client_label.upper()}] Deleted {len(msg_ids)} message(s) in {chat_id} after peer resolve")
+                return []
+            except Exception as e2:
+                LOGGER.error(f"[{client_label.upper()}] Retry after peer resolve failed in {chat_id}: {e2}")
+                return msg_ids
+        LOGGER.warning(f"[{client_label.upper()}] Peer unresolved in {chat_id}: {e}")
+        return msg_ids
     except _SESSION_DEAD as e:
         if client_label == "Userbot":
             _userbot_session_dead = True

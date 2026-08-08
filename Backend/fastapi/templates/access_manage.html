@@ -564,7 +564,7 @@
             const sel = document.getElementById('assign-plan-select');
             if (!sel) return;
             sel.innerHTML = '<option value="">— Select a plan —</option>' +
-                plans.map(p => `<option value="${p.days}">${p.days} days${p.price ? ' — ₹' + p.price : ''}</option>`).join('');
+                plans.map(p => { const sym = ({INR:'₹',USD:'$',EUR:'€',GBP:'£',JPY:'¥',AUD:'A$',CAD:'C$',SGD:'S$',AED:'د.إ',BRL:'R$'}[(p.currency||'INR').toUpperCase()]||((p.currency||'INR')+' ')); return `<option value="${p.days}">${p.days} days${p.price != null ? ' — ' + sym + p.price : ''}</option>`; }).join('');
         } catch (e) { /* ignore */ }
     }
 

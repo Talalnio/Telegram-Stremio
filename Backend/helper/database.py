@@ -287,11 +287,12 @@ class Database:
             upsert=True
         )
 
-    async def set_pending_payment(self, user_id: int, plan_duration: int, msg_id: int, price=0, admin_messages: list = None):
+    async def set_pending_payment(self, user_id: int, plan_duration: int, msg_id: int, price=0, admin_messages: list = None, currency: str = "INR"):
         update_data = {
             "pending_payment": {
                 "duration": plan_duration,
                 "price": price,
+                "currency": (currency or "INR").upper(),
                 "msg_id": msg_id,
                 "date": datetime.utcnow(),
             }
@@ -372,19 +373,20 @@ class Database:
         plans = await cursor.to_list(None)
         return [convert_objectid_to_str(plan) for plan in plans]
 
-    async def add_subscription_plan(self, days: int, price: float) -> Optional[str]:
+    async def add_subscription_plan(self, days: int, price: float, currency: str = "INR") -> Optional[str]:
         result = await self.dbs["tracking"]["sub_plans"].insert_one({
             "days": days,
             "price": price,
+            "currency": (currency or "INR").upper(),
             "created_at": datetime.utcnow()
         })
         return str(result.inserted_id)
 
-    async def update_subscription_plan(self, plan_id: str, days: int, price: float) -> bool:
+    async def update_subscription_plan(self, plan_id: str, days: int, price: float, currency: str = "INR") -> bool:
         try:
             result = await self.dbs["tracking"]["sub_plans"].update_one(
                 {"_id": ObjectId(plan_id)},
-                {"$set": {"days": days, "price": price, "updated_at": datetime.utcnow()}}
+                {"$set": {"days": days, "price": price, "currency": (currency or "INR").upper(), "updated_at": datetime.utcnow()}}
             )
             return result.modified_count > 0
         except Exception:
@@ -1664,7 +1666,7 @@ class Database:
                 {"$project": {
                     "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1, "imdb_id": 1,
                     "release_year": 1, "poster": 1, "backdrop": 1, "description": 1, "logo": 1,
-                    "media_type": 1, "db_index": 1
+                    "media_type": 1, "db_index": 1, "seasons": 1
                 }}
             ]
             
@@ -1673,7 +1675,7 @@ class Database:
                 {"$project": {
                     "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1,
                     "release_year": 1, "poster": 1, "backdrop": 1, "description": 1,
-                    "media_type": 1, "db_index": 1, "imdb_id": 1, "logo": 1
+                    "media_type": 1, "db_index": 1, "imdb_id": 1, "logo": 1, "telegram": 1
                 }}
             ]
             

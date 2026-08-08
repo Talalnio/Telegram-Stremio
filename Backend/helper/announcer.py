@@ -2,7 +2,7 @@ from asyncio import create_task
 from datetime import datetime
 
 from pyrogram.enums import ParseMode
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, MessageDeleteForbidden, MessageIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from Backend import db
@@ -22,7 +22,7 @@ def _resolve_chat(value: str):
         return value
 
 
-#----- Atomically claim a title so it is announced at most once
+#----- Atomically claim a title so it is announced at most once; returns True if newly claimed
 async def _claim(media_type: str, tmdb_id) -> bool:
     if not tmdb_id:
         return False
@@ -32,6 +32,19 @@ async def _claim(media_type: str, tmdb_id) -> bool:
         upsert=True,
     )
     return result.upserted_id is not None
+
+
+async def _store_announcement_msg(media_type: str, tmdb_id, chat_id, message_id: int) -> None:
+    if not tmdb_id or not message_id:
+        return
+    try:
+        await db.dbs["tracking"]["announced"].update_one(
+            {"_id": f"{media_type}:{tmdb_id}"},
+            {"$set": {"chat_id": chat_id, "message_id": message_id, "at": datetime.utcnow()}},
+            upsert=True,
+        )
+    except Exception as e:
+        LOGGER.warning(f"Failed to store announcement message id: {e}")
 
 
 def _build_caption(info: dict) -> str:
@@ -90,17 +103,20 @@ async def _announce(info: dict) -> None:
     markup = _build_markup(info)
 
     try:
+        sent = None
         if poster:
             try:
-                await StreamBot.send_photo(chat, poster, caption=caption,
+                sent = await StreamBot.send_photo(chat, poster, caption=caption,
                                            parse_mode=ParseMode.HTML, reply_markup=markup)
-                return
             except FloodWait:
                 raise
             except Exception:
-                pass
-        await StreamBot.send_message(chat, caption, parse_mode=ParseMode.HTML,
+                sent = None
+        if sent is None:
+            sent = await StreamBot.send_message(chat, caption, parse_mode=ParseMode.HTML,
                                      reply_markup=markup, disable_web_page_preview=True)
+        if sent is not None:
+            await _store_announcement_msg(info.get("media_type"), info.get("tmdb_id"), chat, sent.id)
     except FloodWait as e:
         LOGGER.warning(f"Announcement FloodWait for {e.value}s")
     except Exception as e:
@@ -113,3 +129,37 @@ def announce_new_media(info: dict) -> None:
         create_task(_announce(dict(info)))
     except RuntimeError:
         LOGGER.warning("Announcement skipped: no running event loop.")
+
+
+#----- Delete the announcement message when media is removed from the library
+async def delete_announcement(media_type: str, tmdb_id) -> None:
+    if not tmdb_id:
+        return
+    key = f"{media_type}:{tmdb_id}"
+    try:
+        doc = await db.dbs["tracking"]["announced"].find_one_and_delete({"_id": key})
+    except Exception as e:
+        LOGGER.warning(f"Failed to lookup announcement for {key}: {e}")
+        return
+    if not doc:
+        return
+    chat_id = doc.get("chat_id")
+    message_id = doc.get("message_id")
+    if not chat_id or not message_id:
+        return
+    try:
+        await StreamBot.delete_messages(chat_id, message_id)
+        LOGGER.info(f"Deleted announcement message {message_id} for {key}")
+    except (MessageDeleteForbidden, MessageIdInvalid) as e:
+        LOGGER.warning(f"Could not delete announcement {message_id} for {key}: {e}")
+    except FloodWait as e:
+        LOGGER.warning(f"FloodWait deleting announcement for {key}: {e.value}s")
+    except Exception as e:
+        LOGGER.warning(f"Failed to delete announcement message for {key}: {e}")
+
+
+def delete_announcement_async(media_type: str, tmdb_id) -> None:
+    try:
+        create_task(delete_announcement(media_type, tmdb_id))
+    except RuntimeError:
+        LOGGER.warning("Announcement delete skipped: no running event loop.")
