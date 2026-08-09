@@ -6,7 +6,7 @@ from bson import ObjectId
 from pymongo import ReturnDocument
 
 from Backend import db
-from Backend.helper.imdb import extract_first_year, get_detail as cinemeta_detail, search_title_multi
+from Backend.helper.metadata.providers.cinemeta import extract_first_year, get_detail as cinemeta_detail, search_title_multi
 from Backend.helper.metadata import (
     extract_default_id,
     format_tmdb_image,

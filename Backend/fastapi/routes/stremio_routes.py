@@ -18,7 +18,7 @@ from Backend.fastapi.security.tokens import verify_token
 from Backend.fastapi.themes import DEFAULT_THEME, get_theme
 from Backend.helper.fanart import fanart_artwork
 from Backend.helper.global_search import global_search, is_global_search_enabled
-from Backend.helper.imdb import get_detail, get_season
+from Backend.helper.metadata.providers.cinemeta import get_detail, get_season
 from Backend.helper.metadata import resolve_cover_url, COMBINED_SEASON, COMBINED_EPISODE_BASE
 from Backend.helper.split_files import parse_combined_episodes, combined_name_key
 from Backend.helper.settings_manager import SettingsManager
@@ -117,9 +117,60 @@ def _merge_filters(*filters) -> dict:
     return parts[0] if len(parts) == 1 else {"$and": parts}
 
 
-#----- Whether a title (by imdb id) may be seen by this token, honouring its own visibility
-async def _title_allowed(imdb_id: str, token_data: dict) -> bool:
-    doc = await db.get_media_details(imdb_id=imdb_id)
+def _parse_stremio_id(id: str):
+    parts = id.split(":")
+    is_kitsu = parts and parts[0].lower() == "kitsu"
+    imdb_id = None
+    kitsu_id = None
+    season_num = None
+    episode_num = None
+    absolute_episode = None
+
+    if is_kitsu:
+        try:
+            kitsu_id = int(parts[1]) if len(parts) > 1 else None
+        except (TypeError, ValueError):
+            kitsu_id = None
+        if len(parts) == 3:
+            try:
+                absolute_episode = int(parts[2])
+            except (TypeError, ValueError):
+                absolute_episode = None
+            episode_num = absolute_episode
+        elif len(parts) >= 4:
+            try:
+                season_num = int(parts[2]) if parts[2] not in ("", "null", "None") else None
+            except (TypeError, ValueError):
+                season_num = None
+            try:
+                episode_num = int(parts[3]) if parts[3] not in ("", "null", "None") else None
+            except (TypeError, ValueError):
+                episode_num = None
+            if season_num is None and episode_num is not None:
+                absolute_episode = episode_num
+    else:
+        imdb_id = parts[0] if parts else id
+        try:
+            season_num = int(parts[1]) if len(parts) > 1 and parts[1] not in ("", "null", "None") else None
+        except (TypeError, ValueError):
+            season_num = None
+        try:
+            episode_num = int(parts[2]) if len(parts) > 2 and parts[2] not in ("", "null", "None") else None
+        except (TypeError, ValueError):
+            episode_num = None
+
+    return {
+        "imdb_id": imdb_id,
+        "kitsu_id": kitsu_id,
+        "season_num": season_num,
+        "episode_num": episode_num,
+        "absolute_episode": absolute_episode,
+        "is_kitsu": is_kitsu,
+    }
+
+
+async def _title_allowed(imdb_id: str = None, token_data: dict = None, kitsu_id: int = None) -> bool:
+    doc = await db.get_media_details(imdb_id=imdb_id, kitsu_id=kitsu_id)
     if not doc:
         return True
     return _token_can_view(doc.get("visibility") or "public", doc.get("allowed_tokens") or [], token_data)
@@ -178,23 +229,64 @@ async def _apply_fanart(meta: dict, item: dict) -> None:
         meta["background"] = art["background"]
 
 
+
+def _year_label(item: dict) -> str:
+    """Single year or range for Stremio releaseInfo (e.g. 1999-2024)."""
+    start = item.get("release_year")
+    end = item.get("release_year_end")
+    if not start:
+        return ""
+    try:
+        start_i = int(start)
+    except (TypeError, ValueError):
+        return str(start)
+    if end:
+        try:
+            end_i = int(end)
+            if end_i > start_i:
+                return f"{start_i}-{end_i}"
+        except (TypeError, ValueError):
+            pass
+    return str(start_i)
+
+
 #----- Map an internal media item into a Stremio meta object
+def _display_title(item: dict) -> str:
+    """Prefer English title when available, else canonical title."""
+    eng = (item.get("title_english") or "").strip()
+    title = (item.get("title") or "").strip()
+    if eng and eng.lower() != title.lower():
+        return eng
+    return eng or title or "Unknown"
+
+
+def _safe_moviedb_id(item: dict):
+    """Never emit null/None for moviedb_id (breaks some Stremio clients)."""
+    v = item.get("tmdb_id")
+    if v is None or str(v).strip().lower() in ("", "null", "none"):
+        return ""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return str(v)
+
+
 def convert_to_stremio_meta(item: dict) -> dict:
     media_type = "series" if item.get("media_type") == "tv" else "movie"
-
+    imdb = item.get("imdb_id") or ""
     meta = {
-        "id": item.get('imdb_id'),
+        "id": imdb,
         "type": media_type,
-        "name": item.get("title"),
-        "poster": _poster_url(item.get("imdb_id"), item.get("poster")),
+        "name": _display_title(item),
+        "poster": _poster_url(imdb, item.get("poster")),
         "logo": item.get("logo") or "",
-        "year": item.get("release_year"),
-        "releaseInfo": str(item.get("release_year", "")),
-        "imdb_id": item.get("imdb_id", ""),
-        "moviedb_id": item.get("tmdb_id", ""),
+        "year": _year_label(item) or item.get("release_year") or "",
+        "releaseInfo": _year_label(item) or "",
+        "imdb_id": imdb,
+        "moviedb_id": _safe_moviedb_id(item),
         "background": _abs_media_url(item.get("backdrop")),
         "genres": item.get("genres") or [],
-        "imdbRating": str(item.get("rating") or ""),
+        "imdbRating": str(item.get("rating") or "") if item.get("rating") not in (None, "") else "",
         "description": item.get("description") or "",
         "cast": item.get("cast") or [],
         "runtime": item.get("runtime") or "",
@@ -207,7 +299,8 @@ def format_released_date(media):
     year = media.get("release_year")
     if year:
         try:
-            return datetime(int(year), 1, 1).isoformat() + "Z"
+            y = int(str(year)[:4])
+            return datetime(y, 1, 1).isoformat() + "Z"
         except Exception:
             return None
     return None
@@ -421,7 +514,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         "types": ["movie", "series"],
         "resources": resources,
         "catalogs": catalogs,
-        "idPrefixes": ["tt", "tg"],
+        "idPrefixes": ["tt", "tg", "kitsu"],
         "behaviorHints": {
             "configurable": True,
             "configurationRequired": False
@@ -515,35 +608,42 @@ async def get_catalog(token: str, media_type: str, id: str, extra: Optional[str]
     return {"metas": metas}
 
 
-#----- Detailed metadata for a title, including series episode list
 @router.get("/{token}/meta/{media_type}/{id}.json")
 async def get_meta(token: str, media_type: str, id: str, token_data: dict = Depends(verify_token)):
     if SettingsManager.current().hide_catalog:
         raise HTTPException(status_code=404, detail="Catalog disabled")
 
-    imdb_id = id
+    parsed = _parse_stremio_id(id)
+    imdb_id = parsed["imdb_id"] if not parsed["is_kitsu"] else None
+    kitsu_id = parsed["kitsu_id"]
 
-    media = await db.get_media_details(imdb_id=imdb_id)
+    media = await db.get_media_details(imdb_id=imdb_id, kitsu_id=kitsu_id)
     if not media:
         return {"meta": {}}
 
     if not _token_can_view(media.get("visibility") or "public", media.get("allowed_tokens") or [], token_data):
         return {"meta": {}}
 
+    meta_id = id
+    if parsed["is_kitsu"] and kitsu_id is not None:
+        meta_id = f"kitsu:{kitsu_id}"
+    elif media.get("imdb_id"):
+        meta_id = media.get("imdb_id")
+
     meta_obj = {
-        "id": id,
+        "id": meta_id,
         "type": "series" if media.get("media_type") == "tv" else "movie",
-        "name": media.get("title", ""),
-        "description": media.get("description", ""),
-        "year": str(media.get("release_year", "")),
-        "imdbRating": str(media.get("rating", "")),
-        "genres": media.get("genres", []),
+        "name": _display_title(media),
+        "description": media.get("description") or "",
+        "year": _year_label(media) or (str(media.get("release_year")) if media.get("release_year") else ""),
+        "imdbRating": str(media.get("rating") or "") if media.get("rating") not in (None, "") else "",
+        "genres": media.get("genres") or [],
         "poster": _poster_url(media.get("imdb_id") or imdb_id, media.get("poster")),
-        "logo": media.get("logo", ""),
+        "logo": media.get("logo") or "",
         "background": _abs_media_url(media.get("backdrop")),
-        "imdb_id": media.get("imdb_id", ""),
-        "releaseInfo": str(media.get("release_year", "")),
-        "moviedb_id": media.get("tmdb_id", ""),
+        "imdb_id": media.get("imdb_id") or (id if not parsed["is_kitsu"] else ""),
+        "releaseInfo": _year_label(media) or "",
+        "moviedb_id": _safe_moviedb_id(media),
         "cast": media.get("cast") or [],
         "runtime": media.get("runtime") or "",
     }
@@ -555,24 +655,62 @@ async def get_meta(token: str, media_type: str, id: str, token_data: dict = Depe
         if released_date:
             meta_obj["released"] = released_date
 
-    #----- Series episodes
-    if media_type == "series" and "seasons" in media:
+    if media_type == "series":
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         videos = []
-        for season in sorted(media.get("seasons", []), key=lambda s: s.get("season_number")):
-            for episode in sorted(season.get("episodes", []), key=lambda e: e.get("episode_number")):
-                episode_id = f"{id}:{season['season_number']}:{episode['episode_number']}"
+        seasons = media.get("seasons") or []
+
+        def _snum(s):
+            try:
+                return int(s.get("season_number"))
+            except (TypeError, ValueError):
+                return 0
+
+        def _enum(e):
+            try:
+                return int(e.get("episode_number"))
+            except (TypeError, ValueError):
+                return 0
+
+        for season in sorted(seasons, key=_snum):
+            s_num = _snum(season)
+            episodes = season.get("episodes") or []
+            for episode in sorted(episodes, key=_enum):
+                e_num = _enum(episode)
+                if not episodes:
+                    continue
+                abs_ep = episode.get("absolute_episode")
+                if parsed["is_kitsu"] and kitsu_id is not None:
+                    if abs_ep is not None:
+                        episode_id = f"kitsu:{kitsu_id}:{abs_ep}"
+                    else:
+                        episode_id = f"kitsu:{kitsu_id}:{s_num}:{e_num}"
+                else:
+                    episode_id = f"{meta_id}:{s_num}:{e_num}"
+                ep_title = (
+                    episode.get("title")
+                    or episode.get("episode_title")
+                    or (f"E{e_num:02d}" if s_num != 0 else f"Combined {e_num}")
+                )
                 videos.append({
                     "id": episode_id,
-                    "title": episode.get("title", f"Episode {episode['episode_number']}"),
-                    "season": season.get("season_number"),
-                    "episode": episode.get("episode_number"),
-                    "overview": episode.get("overview") or "No description available for this episode yet.",
-                    "released": episode.get("released") or yesterday,
-                    "thumbnail": _abs_media_url(episode.get("episode_backdrop")) or "https://raw.githubusercontent.com/weebzone/Colab-Tools/refs/heads/main/no_episode_backdrop.png",
-                    "imdb_id": episode.get("imdb_id") or media.get("imdb_id"),
+                    "title": ep_title,
+                    "season": s_num,
+                    "episode": e_num,
+                    "overview": (
+                        episode.get("overview")
+                        or episode.get("episode_overview")
+                        or "No description available for this episode yet."
+                    ),
+                    "released": episode.get("released") or episode.get("episode_released") or yesterday,
+                    "thumbnail": _abs_media_url(
+                        episode.get("episode_backdrop") or episode.get("thumbnail")
+                    ) or "https://raw.githubusercontent.com/weebzone/Colab-Tools/refs/heads/main/no_episode_backdrop.png",
+                    "imdb_id": episode.get("imdb_id") or media.get("imdb_id") or (id if not parsed["is_kitsu"] else ""),
                 })
         meta_obj["videos"] = videos
+        if not videos:
+            LOGGER.warning(f"[META] series {id} has no episode entries in DB")
     return {"meta": meta_obj}
 
 
@@ -595,35 +733,39 @@ async def get_subtitles(token: str, media_type: str, id: str, extra: Optional[st
     return {"subtitles": stremio_subtitle_entries(subs, token, SettingsManager.current().base_url)}
 
 
-#----- Collect Global Search streams for a title/episode via IMDb lookup
-async def _global_streams_for(token: str, imdb_id: str, media_type: str, season_num: Optional[int], episode_num: Optional[int]) -> list:
-    imdb_media_type = "tvSeries" if media_type == "series" else "movie"
-
-    detail = await get_detail(imdb_id=imdb_id, media_type=imdb_media_type)
-    if not detail or not detail.get("title"):
-        return []
-
-    expected_title = detail["title"]
-    year = (detail.get("releaseDetailed") or {}).get("year") or None
-
-    if season_num is not None and episode_num is not None:
-        try:
-            await get_season(imdb_id=imdb_id, season_id=season_num, episode_id=episode_num)
-        except Exception:
-            pass
-
+async def _kitsu_title_year(kitsu_id: int) -> tuple:
     try:
-        global_results = await global_search(
-            expected_title,
-            SettingsManager.current().auth_channels,
-            year=year,
-            season=season_num,
-            episode=episode_num,
+        from Backend.helper.metadata.providers.kitsu import get_anizip_mappings, _get_client, KITSU_URL
+        client = await _get_client()
+        resp = await client.get(f"{KITSU_URL}/anime/{int(kitsu_id)}")
+        resp.raise_for_status()
+        data = (resp.json() or {}).get("data") or {}
+        attrs = data.get("attributes") or {}
+        titles = attrs.get("titles") or {}
+        title = (
+            titles.get("en")
+            or titles.get("en_jp")
+            or attrs.get("canonicalTitle")
+            or titles.get("ja_jp")
+            or ""
         )
+        year = None
+        start = attrs.get("startDate") or ""
+        if start and len(str(start)) >= 4:
+            try:
+                year = int(str(start)[:4])
+            except (TypeError, ValueError):
+                year = None
+        if not title:
+            doc = await get_anizip_mappings(int(kitsu_id)) or {}
+            title = (doc.get("title") or {}).get("en") or (doc.get("title") or {}).get("x-jat") or ""
+        return title, year
     except Exception as e:
-        LOGGER.error(f"[GLOBAL SEARCH] search failed for '{expected_title}': {e}")
-        return []
+        LOGGER.warning(f"[KITSU] title lookup failed for {kitsu_id}: {e}")
+        return "", None
 
+
+def _streams_from_global_results(token: str, global_results: list) -> list:
     streams = []
     for r in global_results:
         is_split = bool(r.get("is_split"))
@@ -637,6 +779,126 @@ async def _global_streams_for(token: str, imdb_id: str, media_type: str, season_
         size_bytes = parse_size_to_bytes(r.get("size", ""))
         streams.append({"name": stream_name, "title": stream_title, "url": url, "size_bytes": size_bytes})
     return streams
+
+
+async def _global_streams_for(
+    token: str,
+    imdb_id: str = None,
+    media_type: str = "series",
+    season_num: Optional[int] = None,
+    episode_num: Optional[int] = None,
+    kitsu_id: Optional[int] = None,
+    absolute_episode: Optional[int] = None,
+    is_anime: bool = False,
+) -> list:
+    expected_title = ""
+    year = None
+    cinemeta_videos = []
+
+    if kitsu_id is not None:
+        expected_title, year = await _kitsu_title_year(int(kitsu_id))
+        is_anime = True
+    elif imdb_id:
+        imdb_media_type = "tvSeries" if media_type == "series" else "movie"
+        detail = await get_detail(imdb_id=imdb_id, media_type=imdb_media_type)
+        if not detail or not detail.get("title"):
+            return []
+        expected_title = detail["title"]
+        year = (detail.get("releaseDetailed") or {}).get("year") or None
+        cinemeta_videos = detail.get("videos") or []
+        if season_num is not None and episode_num is not None and absolute_episode is None:
+            try:
+                await get_season(imdb_id=imdb_id, season_id=season_num, episode_id=episode_num)
+            except Exception:
+                pass
+
+    if not expected_title:
+        return []
+
+    search_season = season_num
+    search_episode = episode_num
+    if is_anime and absolute_episode is not None:
+        search_season = None
+        search_episode = absolute_episode
+    elif is_anime and season_num is None and episode_num is not None:
+        search_season = None
+        search_episode = episode_num
+
+    abs_ep = absolute_episode
+    map_source = None
+    if (
+        abs_ep is None
+        and media_type == "series"
+        and imdb_id
+        and season_num is not None
+        and episode_num is not None
+    ):
+        try:
+            from Backend.helper.metadata.episode_maps import absolute_from_imdb_episode
+
+            mapped = await absolute_from_imdb_episode(
+                imdb_id,
+                int(season_num),
+                int(episode_num),
+                title=expected_title,
+                videos=cinemeta_videos,
+            )
+            if mapped and mapped.get("is_anime"):
+                is_anime = True
+                map_source = mapped.get("source")
+                abs_ep = mapped.get("absolute_episode")
+                if abs_ep is None and int(season_num) == 1:
+                    abs_ep = int(episode_num)
+        except Exception as e:
+            LOGGER.warning(f"[GLOBAL SEARCH] anime map lookup failed for {imdb_id}: {e}")
+
+    mapped_from_sxx = (
+        abs_ep is not None
+        and absolute_episode is None
+        and season_num is not None
+        and episode_num is not None
+    )
+    if mapped_from_sxx:
+        search_season = None
+        search_episode = int(abs_ep)
+        LOGGER.info(
+            f"[GLOBAL SEARCH] Anime mapped S{int(season_num):02d}E{int(episode_num):02d} "
+            f"→ absolute {int(abs_ep)} for '{expected_title}'"
+            + (f" (via {map_source})" if map_source else "")
+            + "; trying absolute first"
+        )
+
+    auth_channels = SettingsManager.current().auth_channels
+    try:
+        global_results = await global_search(
+            expected_title,
+            auth_channels,
+            year=year,
+            season=search_season,
+            episode=search_episode,
+        )
+    except Exception as e:
+        LOGGER.error(f"[GLOBAL SEARCH] search failed for '{expected_title}': {e}")
+        global_results = []
+
+    if not global_results and mapped_from_sxx:
+        LOGGER.info(
+            f"[GLOBAL SEARCH] Absolute {int(abs_ep)} empty for '{expected_title}'; "
+            f"falling back to S{int(season_num):02d}E{int(episode_num):02d}"
+        )
+        try:
+            global_results = await global_search(
+                expected_title,
+                auth_channels,
+                year=year,
+                season=season_num,
+                episode=episode_num,
+            )
+        except Exception as e:
+            LOGGER.error(f"[GLOBAL SEARCH] SxxExx fallback failed for '{expected_title}': {e}")
+            global_results = []
+
+    return _streams_from_global_results(token, global_results)
 
 
 #----- Cached check that a user is still in the subscription group (fail-open)
@@ -736,20 +998,28 @@ async def get_streams(
         }
 
     try:
-        parts = id.split(":")
-        imdb_id = parts[0]
-        season_num = int(parts[1]) if len(parts) > 1 else None
-        episode_num = int(parts[2]) if len(parts) > 2 else None
+        parsed = _parse_stremio_id(id)
+        imdb_id = parsed["imdb_id"]
+        kitsu_id = parsed["kitsu_id"]
+        season_num = parsed["season_num"]
+        episode_num = parsed["episode_num"]
+        absolute_episode = parsed["absolute_episode"]
+        is_kitsu = parsed["is_kitsu"]
     except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail="Invalid Stremio ID format")
 
-    if not await _title_allowed(imdb_id, token_data):
+    if is_kitsu and kitsu_id is None:
+        raise HTTPException(status_code=400, detail="Invalid Kitsu ID format")
+
+    if not await _title_allowed(imdb_id=imdb_id, token_data=token_data, kitsu_id=kitsu_id):
         return {"streams": []}
 
     media_details = await db.get_media_details(
         imdb_id=imdb_id,
         season_number=season_num,
-        episode_number=episode_num
+        episode_number=episode_num,
+        kitsu_id=kitsu_id,
+        absolute_episode=absolute_episode,
     )
 
     streams = []
@@ -789,11 +1059,23 @@ async def get_streams(
                     streams.append({"name": stream_name, "title": stream_title, "url": original_url, "size_bytes": size_bytes, "episode_start": episode_start, "name_key": name_key})
     elif is_global_search_enabled():
         try:
+            is_anime = bool(is_kitsu or (media_details and media_details.get("is_anime")))
+            log_id = f"kitsu:{kitsu_id}" if is_kitsu else imdb_id
+            LOGGER.info(f"{log_id}:{season_num}:{episode_num}:abs={absolute_episode}|{media_type}")
             streams.extend(
-                await _global_streams_for(token, imdb_id, media_type, season_num, episode_num)
+                await _global_streams_for(
+                    token,
+                    imdb_id=imdb_id,
+                    media_type=media_type,
+                    season_num=season_num,
+                    episode_num=episode_num,
+                    kitsu_id=kitsu_id,
+                    absolute_episode=absolute_episode,
+                    is_anime=is_anime,
+                )
             )
         except Exception as e:
-            LOGGER.error(f"[GLOBAL SEARCH] stream search failed for {imdb_id}: {e}")
+            LOGGER.error(f"[GLOBAL SEARCH] stream search failed for {id}: {e}")
 
     #----- Per-token quality filter (fall back to all if it would hide everything)
     config = token_data.get("config") or {}

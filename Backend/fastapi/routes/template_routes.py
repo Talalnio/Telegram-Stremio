@@ -270,6 +270,11 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
     except Exception:
         settings["database_list"] = []
 
+    titles = settings.get("channel_titles") or {}
+    if not isinstance(titles, dict):
+        titles = {}
+    settings["channel_titles"] = {str(k): str(v) for k, v in titles.items() if k and v}
+
     ctx = _base_context(request)
     ctx.update({
         "current_user": get_current_user(request),
