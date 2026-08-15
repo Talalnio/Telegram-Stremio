@@ -32,7 +32,7 @@ class ByteStreamer:
     def __init__(self, client: Client, client_index: int = -1):
         self.client = client
         self.client_index = client_index
-        self._file_id_cache: Dict[int, FileId] = {}
+        self._file_id_cache: Dict[Tuple[int, int], FileId] = {}
         self._session_lock = asyncio.Lock()
         if client_index >= 0:
             ByteStreamer._instances[client_index] = self
@@ -75,13 +75,14 @@ class ByteStreamer:
 
     #----- Fetch (and cache) Telegram FileId properties for a message
     async def get_file_properties(self, chat_id: int, message_id: int) -> FileId:
-        if message_id not in self._file_id_cache:
+        cache_key = (int(chat_id), int(message_id))
+        if cache_key not in self._file_id_cache:
             file_id = await get_file_ids(self.client, int(chat_id), int(message_id))
             if not file_id:
-                LOGGER.warning("Message %s not found", message_id)
+                LOGGER.warning("Message %s not found in chat %s", message_id, chat_id)
                 raise FileNotFound
-            self._file_id_cache[message_id] = file_id
-        return self._file_id_cache[message_id]
+            self._file_id_cache[cache_key] = file_id
+        return self._file_id_cache[cache_key]
 
     #----- Build a prefetching, range-aware streaming generator for a file
     async def prefetch_stream(
@@ -139,14 +140,15 @@ class ByteStreamer:
                 if not chat_id or not message_id:
                     return False
                 try:
-                    streamer_ref._file_id_cache.pop(message_id, None)
+                    cache_key = (int(chat_id), int(message_id))
+                    streamer_ref._file_id_cache.pop(cache_key, None)
                     fresh = await get_file_ids(streamer_ref.client, chat_id, message_id)
                     if fresh:
-                        streamer_ref._file_id_cache[message_id] = fresh
+                        streamer_ref._file_id_cache[cache_key] = fresh
                         loc_b[0] = await ByteStreamer._get_location(fresh)
                         return True
                 except Exception as exc:
-                    LOGGER.warning("Location refresh failed for msg_id=%s: %s", message_id, exc)
+                    LOGGER.warning("Location refresh failed for chat=%s msg_id=%s: %s", chat_id, message_id, exc)
                 return False
             return _refresh
 
