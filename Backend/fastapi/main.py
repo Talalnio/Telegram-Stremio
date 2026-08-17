@@ -115,6 +115,7 @@ from Backend.fastapi.routes.api_routes import (
 from Backend.fastapi.routes.stream_routes import decay_client_failures
 from Backend.fastapi.routes.stream_routes import router as stream_router
 from Backend.fastapi.routes.stremio_routes import router as stremio_router
+from Backend.fastapi.routes.webdav_routes import router as webdav_router
 from Backend.fastapi.routes.template_routes import (
     admin_access_page,
     admin_dashboard_page,
@@ -168,6 +169,7 @@ async def _startup():
 #----- Streaming and Stremio routers
 app.include_router(stream_router)
 app.include_router(stremio_router)
+app.include_router(webdav_router)
 
 
 #----- Public routes (no authentication)
@@ -780,4 +782,14 @@ async def tools_duplicates_purge(payload: dict | None = None, _: bool = Depends(
 
 @app.exception_handler(401)
 async def auth_exception_handler(request: Request, exc):
+    # API / stream / WebDAV clients must receive a real 401, not an HTML login redirect.
+    path = request.url.path or ""
+    if path.startswith(("/webdav", "/dl/", "/sub/", "/stremio/", "/api/", "/thumb/")):
+        from fastapi.responses import JSONResponse
+        detail = getattr(exc, "detail", "Unauthorized")
+        headers = {}
+        # Preserve WWW-Authenticate for WebDAV Basic auth prompts
+        if hasattr(exc, "headers") and exc.headers:
+            headers.update(exc.headers)
+        return JSONResponse(status_code=401, content={"detail": detail}, headers=headers)
     return RedirectResponse(url="/login", status_code=302)
