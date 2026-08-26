@@ -72,7 +72,7 @@ from Backend.helper.subtitles import (
 )
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
-from Backend.helper.announcer import delete_announcement_async
+from Backend.helper.announcer import announce_removed_media, delete_announcement_async
 from Backend.pyrofork.bot import (
     StreamBot,
     client_avg_mbps,
@@ -186,10 +186,37 @@ async def delete_media_api(
 ):
     tmdb_id = _require_tmdb_id(tmdb_id)
     try:
+        removed_info = None
+        try:
+            location = await db.find_media_doc(media_type, tmdb_id)
+            if location:
+                doc = location[0]
+                removed_info = {
+                    "media_type": media_type,
+                    "tmdb_id": doc.get("tmdb_id"),
+                    "imdb_id": doc.get("imdb_id"),
+                    "title": doc.get("title") or "",
+                    "year": doc.get("release_year") or 0,
+                    "rate": doc.get("rating") or 0,
+                    "description": doc.get("description") or "",
+                    "poster": doc.get("poster") or "",
+                    "backdrop": doc.get("backdrop") or "",
+                    "genres": doc.get("genres") or [],
+                    "is_anime": bool(doc.get("is_anime")),
+                    "quality": "",
+                    "size": "",
+                }
+        except Exception:
+            removed_info = None
+
         media_type_formatted = "Movie" if media_type == "movie" else "Series"
         result = await db.delete_document(media_type_formatted, tmdb_id, db_index)
         if result:
-            # Remove matching announcement post from the announcement channel
+            if removed_info:
+                try:
+                    announce_removed_media(removed_info)
+                except Exception as e:
+                    LOGGER.warning(f"Failed to queue removed announcement: {e}")
             delete_announcement_async(media_type, tmdb_id)
             return {"message": "Media deleted successfully"}
         else:

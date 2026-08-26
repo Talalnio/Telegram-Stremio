@@ -870,9 +870,9 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
 
 
 
-<!-- ── New Content Announcements ──────────────────────────────────── -->
+<!-- ── Webhook / Notifications ──────────────────────────────────── -->
 <div class="settings-card">
-    <h2><i class="fa-solid fa-bullhorn"></i> New Content Announcements</h2>
+    <h2><i class="fa-solid fa-bullhorn"></i> Webhook &amp; Notifications</h2>
 
     <label class="toggle-wrap">
         <input type="checkbox" class="toggle-input" id="announce_new_content"
@@ -880,7 +880,7 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
             onchange="toggleAnnouncementFields()">
         <span class="toggle-track"></span>
         <span class="toggle-label">
-            <strong>Announce New Titles</strong>
+            <strong>Announce New Titles (Telegram)</strong>
             <span style="color:var(--text-sec);font-size:0.8rem;display:block">
                 Auto-post a poster card to a Telegram channel the first time a
                 new movie or series is added. Each title is announced only once.
@@ -891,11 +891,11 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
     <div id="announcement-fields"
          style="{% if not settings.announce_new_content %}display:none{% endif %}">
         <hr class="divider">
-        <label class="s-label" for="announcement_channel">ANNOUNCEMENT CHANNEL</label>
+        <label class="s-label" for="announcement_channel">TELEGRAM ANNOUNCEMENT CHANNEL</label>
         <p style="font-size:0.78rem;color:var(--text-sec);margin-bottom:0.75rem">
             <i class="fa-solid fa-circle-info"></i>
             Channel ID only in <code>-100xxxxxxxxxx</code> format (channels only).
-            The bot must be an <strong>admin</strong> in that channel.
+            The main bot must be an <strong>admin</strong> in that channel.
         </p>
         <div class="multi-item" style="margin-top:0.25rem">
             {% set ac_t = (settings.channel_titles or {}).get(settings.announcement_channel|string, settings.announcement_channel) %}
@@ -910,6 +910,66 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
                 onclick="clearSingleChannel('announcement_channel')" title="Remove">
                 <i class="fa-solid fa-xmark"></i>
             </button>
+        </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="grid-2">
+        <div>
+            <label class="s-label" for="notification_bot_token">TELEGRAM NOTIFICATION BOT TOKEN <span style="font-weight:400;text-transform:none">(optional)</span></label>
+            <input type="text" id="notification_bot_token" class="s-input"
+                value="{{ settings.notification_bot_token }}" autocomplete="off" spellcheck="false"
+                placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                Alternative bot token for notifications (separate from the main StreamBot).
+                Leave empty to disable this delivery path.
+            </p>
+        </div>
+        <div>
+            <label class="s-label" for="notification_chat_id">TELEGRAM NOTIFICATION CHAT ID <span style="font-weight:400;text-transform:none">(optional)</span></label>
+            <input type="text" id="notification_chat_id" class="s-input"
+                value="{{ settings.notification_chat_id }}" autocomplete="off"
+                placeholder="-100xxxxxxxxxx or @username">
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                Target chat for the notification bot token above.
+            </p>
+        </div>
+    </div>
+
+    <hr class="divider">
+
+    <div>
+        <label class="s-label" for="discord_webhook_url">DISCORD WEBHOOK URL <span style="font-weight:400;text-transform:none">(optional)</span></label>
+        <input type="url" id="discord_webhook_url" class="s-input"
+            value="{{ settings.discord_webhook_url }}" autocomplete="off" spellcheck="false"
+            placeholder="https://discord.com/api/webhooks/...">
+        <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+            Announcements are delivered via a rich embed. Same content as Telegram.
+        </p>
+    </div>
+
+    <hr class="divider">
+
+    <div class="grid-2">
+        <div>
+            <label class="s-label" for="notification_events">WHAT TO SEND</label>
+            <select id="notification_events" class="s-input" style="cursor:pointer">
+                <option value="add" {% if settings.notification_events == 'add' %}selected{% endif %}>Add (only additions)</option>
+                <option value="remove" {% if settings.notification_events == 'remove' %}selected{% endif %}>Remove (only removals)</option>
+                <option value="both" {% if settings.notification_events == 'both' %}selected{% endif %}>Add &amp; Remove</option>
+            </select>
+        </div>
+        <div>
+            <label class="s-label" for="metadata_language">METADATA LANGUAGE</label>
+            <select id="metadata_language" class="s-input" style="cursor:pointer">
+                <option value="EN" {% if settings.metadata_language == 'EN' %}selected{% endif %}>English (EN)</option>
+                <option value="AR" {% if settings.metadata_language == 'AR' %}selected{% endif %}>Arabic (AR)</option>
+                <option value="IN" {% if settings.metadata_language == 'IN' %}selected{% endif %}>Hindi (IN)</option>
+            </select>
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                Translates labels, genres, and event headers. Titles and technical values are unchanged.
+            </p>
         </div>
     </div>
 </div>
@@ -1522,6 +1582,11 @@ async function saveSettings() {
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
+        discord_webhook_url:           document.getElementById('discord_webhook_url').value.trim(),
+        notification_bot_token:        document.getElementById('notification_bot_token').value.trim(),
+        notification_chat_id:          document.getElementById('notification_chat_id').value.trim(),
+        notification_events:           document.getElementById('notification_events').value,
+        metadata_language:             document.getElementById('metadata_language').value,
     };
 
     try {
@@ -1660,6 +1725,12 @@ function renderSettings(s) {
     const wp = document.getElementById('webdav_password');
     if (wp) wp.value = s.webdav_password || '';
     toggleMediaflowFields();
+
+    document.getElementById('discord_webhook_url').value = s.discord_webhook_url || '';
+    document.getElementById('notification_bot_token').value = s.notification_bot_token || '';
+    document.getElementById('notification_chat_id').value = s.notification_chat_id || '';
+    document.getElementById('notification_events').value = (s.notification_events && ['add','remove','both'].includes(s.notification_events)) ? s.notification_events : 'add';
+    document.getElementById('metadata_language').value = (s.metadata_language && ['EN','AR','IN'].includes(s.metadata_language)) ? s.metadata_language : 'EN';
 
     const titles = s.channel_titles || {};
     rebuildAuthChannels(s.auth_channels, s.anime_channels, titles);

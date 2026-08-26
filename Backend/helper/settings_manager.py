@@ -53,6 +53,11 @@ _DEFAULTS: Dict[str, Any] = {
     "fanart_shuffle": False,
     "fanart_shuffle_interval": 5,
     "fanart_low_res_poster": True,
+    "discord_webhook_url": "",
+    "notification_bot_token": "",
+    "notification_chat_id": "",
+    "notification_events": "add",
+    "metadata_language": "EN",
 }
 
 
@@ -244,6 +249,32 @@ class Settings:
     @property
     def fanart_low_res_poster(self) -> bool:
         return bool(self._d.get("fanart_low_res_poster", True))
+
+    @property
+    def discord_webhook_url(self) -> str:
+        return str(self._d.get("discord_webhook_url") or "").strip()
+
+    @property
+    def notification_bot_token(self) -> str:
+        return str(self._d.get("notification_bot_token") or "").strip()
+
+    @property
+    def notification_chat_id(self) -> str:
+        return str(self._d.get("notification_chat_id") or "").strip()
+
+    @property
+    def notification_events(self) -> str:
+        v = str(self._d.get("notification_events") or "add").strip().lower()
+        if v in ("add", "remove", "both"):
+            return v
+        return "add"
+
+    @property
+    def metadata_language(self) -> str:
+        v = str(self._d.get("metadata_language") or "EN").strip().upper()
+        if v in ("EN", "AR", "IN"):
+            return v
+        return "EN"
 
     #----- Integers
     @property
