@@ -845,16 +845,41 @@ async def fetch_anime_tv(
             except (TypeError, ValueError):
                 pass
 
+    # ani.zip sometimes sets seasonNumber but leaves episodeNumber equal to the
+    # absolute number (e.g. Naruto abs 36 → S02E36 instead of S02E01). Treat
+    # that as unmapped so Anime-Lists / anibridge can apply the real offset.
+    anizip_looks_absolute = False
+    if is_abs and ep:
+        try:
+            rel = ep.get("episodeNumber")
+            abs_n = ep.get("absoluteEpisodeNumber")
+            if rel is not None:
+                rel_i = int(rel)
+                if rel_i == int(episode):
+                    anizip_looks_absolute = True
+                elif abs_n is not None and rel_i == int(abs_n):
+                    anizip_looks_absolute = True
+            elif ep.get("seasonNumber") is not None and abs_n is not None:
+                # season present but no relative episode — still suspect
+                anizip_looks_absolute = True
+        except (TypeError, ValueError):
+            pass
+
     needs_fallback = is_abs and (
         not ep
         or ep.get("seasonNumber") is None
+        or anizip_looks_absolute
         or (
             ep.get("absoluteEpisodeNumber") is None
             and ep.get("seasonNumber") is None
         )
     )
 
-    if needs_fallback:
+    # Always try episode_maps on absolute episodes when we have provider IDs.
+    # Prefer a real mapped S/E (with offset) over ani.zip when they disagree —
+    # Anime-Lists is authoritative for shows like Naruto / One Piece.
+    map_hit = None
+    if is_abs:
         try:
             from Backend.helper.metadata.episode_maps import resolve_absolute_episode
 
@@ -868,16 +893,39 @@ async def fetch_anime_tv(
             LOGGER.debug(f"[KITSU] episode_maps resolve failed: {e}")
             map_hit = None
 
-        if map_hit:
-            if map_hit.get("season_number") is not None:
-                use_season = int(map_hit["season_number"])
-            if map_hit.get("episode_number") is not None:
-                use_episode = int(map_hit["episode_number"])
-            for key in ("tvdb_id", "tmdb_id", "imdb_id"):
-                if map_hit.get(key) and not extra_ids.get(key):
-                    extra_ids[key] = map_hit[key]
-            if map_hit.get("tvdb_absolute") and map_hit.get("tvdb_id"):
-                extra_ids["tvdb_id"] = map_hit["tvdb_id"]
+    if map_hit and (
+        needs_fallback
+        or (
+            map_hit.get("season_number") is not None
+            and map_hit.get("episode_number") is not None
+            and not map_hit.get("tvdb_absolute")
+            and (
+                use_season is None
+                or int(use_episode) == int(episode)
+                or int(map_hit["season_number"]) != int(use_season or 0)
+                or int(map_hit["episode_number"]) != int(use_episode)
+            )
+        )
+    ):
+        if map_hit.get("season_number") is not None:
+            use_season = int(map_hit["season_number"])
+        if map_hit.get("episode_number") is not None:
+            use_episode = int(map_hit["episode_number"])
+        for key in ("tvdb_id", "tmdb_id", "imdb_id"):
+            if map_hit.get(key) and not extra_ids.get(key):
+                extra_ids[key] = map_hit[key]
+        if map_hit.get("tvdb_absolute") and map_hit.get("tvdb_id"):
+            extra_ids["tvdb_id"] = map_hit["tvdb_id"]
+        LOGGER.info(
+            f"[KITSU] episode_maps override for '{title}' abs={episode} "
+            f"→ S{use_season}E{use_episode} (source={map_hit.get('source')})"
+        )
+    elif map_hit and map_hit.get("tvdb_absolute") and map_hit.get("tvdb_id"):
+        # Absolute-on-TVDB: keep absolute episode number, surface tvdb id
+        for key in ("tvdb_id", "tmdb_id", "imdb_id"):
+            if map_hit.get(key) and not extra_ids.get(key):
+                extra_ids[key] = map_hit[key]
+        extra_ids["tvdb_id"] = map_hit["tvdb_id"]
 
     season_number = int(use_season) if use_season is not None else 1
     episode_number = int(use_episode)
