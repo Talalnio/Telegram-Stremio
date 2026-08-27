@@ -430,9 +430,11 @@ async def _announce_event(info: Dict[str, Any], event: str) -> None:
             LOGGER.error(f"[Announcer] Telegram legacy exception (non-fatal): {e}")
 
         # --- Telegram Direct (separate bot token) ---
+        # Skip if Telegram Legacy already handled this (avoid duplicate notifications)
+        telegram_legacy_sent = any_success and legacy_msg_id is not None
         try:
             settings = SettingsManager.current()
-            if settings.notification_bot_token and settings.notification_chat_id:
+            if settings.notification_bot_token and settings.notification_chat_id and not telegram_legacy_sent:
                 await _deliver_telegram_direct(p)
                 any_success = True
         except Exception as e:

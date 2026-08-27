@@ -40,6 +40,7 @@ from Backend.helper.requests_manager import (
     submit_request,
 )
 from Backend.helper.metadata import (
+    entry as metadata_entry,
     extract_default_id,
     fetch_selected_movie_metadata,
     fetch_selected_tv_metadata,
@@ -2332,6 +2333,270 @@ async def purge_dead_links_api(payload: dict | None = None) -> dict:
 
     return {"status": "success" if result.get("ok") else "error", **result}
 
+
+
+#----- ── Rescan All Metadata ─────────────────────────────────────────────────
+
+async def rescan_all_metadata_api(payload: dict) -> dict:
+    """Rescan metadata for all movies and TV shows in the library."""
+    settings = SettingsManager.current()
+    
+    source = str(payload.get("source") or settings.metadata_source or "tmdb").lower()
+    language = str(payload.get("language") or settings.metadata_language or "EN").upper()
+    
+    # Validate source
+    if source not in ("tmdb", "tmdb_tvdb", "cinemeta"):
+        source = "tmdb"
+    
+    # Validate language
+    if language not in ("EN", "AR", "HI"):
+        language = "EN"
+    
+    LOGGER.info(f"[Rescan All] Starting metadata rescan with source={source}, language={language}")
+    
+    results = {
+        "movies_processed": 0,
+        "movies_updated": 0,
+        "movies_failed": 0,
+        "tv_processed": 0,
+        "tv_updated": 0,
+        "tv_failed": 0,
+        "errors": []
+    }
+    
+    # Process all storage databases
+    for db_index in range(1, db.current_db_index + 1):
+        storage_db = db.dbs.get(f"storage_{db_index}")
+        if not storage_db:
+            continue
+        
+        # Process movies
+        try:
+            async for movie in storage_db["movie"].find({}):
+                results["movies_processed"] += 1
+                try:
+                    updated = await _rescan_single_media(
+                        movie, "movie", source, language, db_index
+                    )
+                    if updated:
+                        results["movies_updated"] += 1
+                except Exception as e:
+                    results["movies_failed"] += 1
+                    error_msg = f"Movie {movie.get('tmdb_id')}: {str(e)}"
+                    results["errors"].append(error_msg)
+                    LOGGER.error(f"[Rescan All] {error_msg}")
+        except Exception as e:
+            LOGGER.error(f"[Rescan All] Failed to process movies in db_{db_index}: {e}")
+        
+        # Process TV shows
+        try:
+            async for tv in storage_db["tv"].find({}):
+                results["tv_processed"] += 1
+                try:
+                    updated = await _rescan_single_media(
+                        tv, "tv", source, language, db_index
+                    )
+                    if updated:
+                        results["tv_updated"] += 1
+                except Exception as e:
+                    results["tv_failed"] += 1
+                    error_msg = f"TV {tv.get('tmdb_id')}: {str(e)}"
+                    results["errors"].append(error_msg)
+                    LOGGER.error(f"[Rescan All] {error_msg}")
+        except Exception as e:
+            LOGGER.error(f"[Rescan All] Failed to process TV in db_{db_index}: {e}")
+    
+    LOGGER.info(f"[Rescan All] Completed: {results}")
+    return {
+        "status": "success",
+        "message": f"Metadata rescan completed. Movies: {results['movies_updated']}/{results['movies_processed']} updated. TV: {results['tv_updated']}/{results['tv_processed']} updated.",
+        "results": results
+    }
+
+
+async def _rescan_single_media(doc: dict, media_type: str, source: str, language: str, db_index: int) -> bool:
+    """Rescan metadata for a single media item. Returns True if updated."""
+    from Backend.helper.metadata.providers import cinemeta, tmdb as tmdb_provider, tvdb
+    
+    tmdb_id = doc.get("tmdb_id")
+    imdb_id = doc.get("imdb_id")
+    title = doc.get("title", "")
+    year = doc.get("year") or doc.get("release_year")
+    
+    if not tmdb_id and not imdb_id:
+        LOGGER.warning(f"[Rescan] Skipping {media_type} with no IDs: {title}")
+        return False
+    
+    # Build default_id for metadata fetching
+    default_id = None
+    if tmdb_id:
+        default_id = f"tmdb:{tmdb_id}"
+    elif imdb_id:
+        default_id = f"imdb:{imdb_id}"
+    
+    # Fetch new metadata based on source
+    new_metadata = None
+    
+    try:
+        if source == "cinemeta":
+            # Use Cinemeta - language is ignored as per requirements
+            if imdb_id:
+                cinemeta_type = "movie" if media_type == "movie" else "tvSeries"
+                detail = await cinemeta.cached_detail(imdb_id, cinemeta_type)
+                if detail:
+                    from Backend.helper.metadata.providers.cinemeta import build_movie_payload, build_tv_payload
+                    if media_type == "movie":
+                        new_metadata = build_movie_payload(detail, imdb_id, title, None, None)
+                    else:
+                        # For TV, we need season/episode info - use existing
+                        seasons = doc.get("seasons", [])
+                        if seasons:
+                            first_season = seasons[0]
+                            season_num = first_season.get("season_number", 1)
+                            episodes = first_season.get("episodes", [])
+                            if episodes:
+                                episode_num = episodes[0].get("episode_number", 1)
+                                ep_detail = await cinemeta.cached_season(imdb_id, season_num, episode_num)
+                                new_metadata = build_tv_payload(detail, ep_detail, season_num, episode_num, None, None)
+        
+        elif source in ("tmdb", "tmdb_tvdb"):
+            # Use TMDB with language support
+            from Backend.helper.metadata.providers.tmdb import get_tmdb_client
+            
+            tmdb_client = get_tmdb_client()
+            if not tmdb_client:
+                LOGGER.error("[Rescan] TMDB client not available")
+                return False
+            
+            # Set language for TMDB requests
+            lang_code = "en-US"  # default
+            if language == "AR":
+                lang_code = "ar-SA"
+            elif language == "HI":
+                lang_code = "hi-IN"
+            
+            # Override language temporarily
+            original_lang = getattr(tmdb_client, 'language', 'en-US')
+            tmdb_client.language = lang_code
+            
+            try:
+                if media_type == "movie":
+                    # Try to get movie by TMDB ID
+                    if tmdb_id:
+                        movie = await tmdb_client.details("movie", tmdb_id)
+                        if movie:
+                            from Backend.helper.metadata.providers.tmdb import build_movie_payload
+                            new_metadata = build_movie_payload(movie, None, None)
+                    
+                    # Fallback: search by title
+                    if not new_metadata and title:
+                        hit = await tmdb_client.safe_search(title, "movie", year)
+                        if hit:
+                            movie = await tmdb_client.details("movie", hit.id)
+                            if movie:
+                                new_metadata = build_movie_payload(movie, None, None)
+                
+                else:  # TV
+                    if tmdb_id:
+                        tv = await tmdb_client.details("tv", tmdb_id)
+                        if tv:
+                            # Get first season/episode for episode details
+                            seasons = doc.get("seasons", [])
+                            season_num = 1
+                            episode_num = 1
+                            if seasons:
+                                season_num = seasons[0].get("season_number", 1)
+                                episodes = seasons[0].get("episodes", [])
+                                if episodes:
+                                    episode_num = episodes[0].get("episode_number", 1)
+                            
+                            ep = await tmdb_client.episode_details(tmdb_id, season_num, episode_num)
+                            from Backend.helper.metadata.providers.tmdb import build_tv_payload
+                            new_metadata = build_tv_payload(tv, ep, season_num, episode_num, None, None)
+                    
+                    # Fallback: search by title
+                    if not new_metadata and title:
+                        hit = await tmdb_client.safe_search(title, "tv", None)
+                        if hit:
+                            tv = await tmdb_client.details("tv", hit.id)
+                            if tv:
+                                ep = await tmdb_client.episode_details(hit.id, 1, 1)
+                                new_metadata = build_tv_payload(tv, ep, 1, 1, None, None)
+            
+            finally:
+                # Restore original language
+                tmdb_client.language = original_lang
+        
+        else:
+            LOGGER.error(f"[Rescan] Unknown source: {source}")
+            return False
+        
+        if not new_metadata:
+            LOGGER.warning(f"[Rescan] Could not fetch new metadata for {title} ({media_type})")
+            return False
+        
+        # Merge new metadata with existing doc (preserve Telegram streams)
+        updated_doc = {**doc}
+        
+        # Update metadata fields that should be refreshed
+        fields_to_update = [
+            "title", "description", "overview", "story", "plot",
+            "genres", "genre", "rating", "rate", "vote_average",
+            "poster", "backdrop", "logo", "images",
+            "cast", "actors", "crew", "director", "directors", "writers",
+            "runtime", "duration", "year", "release_year", "release_date",
+            "content_rating", "certification", "country", "countries",
+            "language", "languages", "tagline", "keywords", "homepage",
+            "status", "budget", "revenue", "popularity", "vote_count",
+        ]
+        
+        for field in fields_to_update:
+            if field in new_metadata and new_metadata[field] is not None:
+                updated_doc[field] = new_metadata[field]
+        
+        # Special handling for description fields (overview/plot/story)
+        for desc_field in ("overview", "plot", "story", "description"):
+            if desc_field in new_metadata and new_metadata[desc_field]:
+                updated_doc["description"] = new_metadata[desc_field]
+                updated_doc["overview"] = new_metadata[desc_field]
+                break
+        
+        # Update rating fields
+        rating_value = new_metadata.get("rating") or new_metadata.get("rate") or new_metadata.get("vote_average")
+        if rating_value is not None:
+            updated_doc["rating"] = float(rating_value)
+            updated_doc["rate"] = float(rating_value)
+        
+        # Preserve critical existing fields that shouldn't be overwritten
+        preserve_fields = [
+            "_id", "tmdb_id", "imdb_id", "kitsu_id", "anidb_id", "mal_id",
+            "telegram", "seasons", "msg_id", "chat_id", "channel", "message_ids",
+            "parts", "file_id", "file_ids", "part_number", "group_key",
+            "db_index", "created_on", "updated_on", "added_on", "indexed_on",
+            "last_watched", "watch_count", "views", "is_anime", "absolute_episode",
+        ]
+        
+        for field in preserve_fields:
+            if field in doc:
+                updated_doc[field] = doc[field]
+        
+        # Update the document in database
+        media_type_for_db = "movie" if media_type == "movie" else "tv"
+        await db.replace_one(
+            media_type_for_db,
+            {"tmdb_id": int(tmdb_id), "db_index": int(db_index)},
+            updated_doc
+        )
+        
+        LOGGER.info(f"[Rescan] Updated {media_type}: {title} (tmdb_id={tmdb_id})")
+        return True
+        
+    except Exception as e:
+        error_msg = f"[Rescan] Error processing {title} ({media_type}): {e}"
+        LOGGER.error(error_msg)
+        import traceback
+        LOGGER.error(traceback.format_exc())
+        return False
 
 
 #----- ── System & Maintenance (web replacements for /stats, /log, /restart) ──

@@ -56,6 +56,7 @@ _DEFAULTS: Dict[str, Any] = {
     "notification_chat_id": "",
     "notification_events": "add",
     "metadata_language": "EN",
+    "metadata_source": "tmdb",
 }
 
 
@@ -262,9 +263,16 @@ class Settings:
     @property
     def metadata_language(self) -> str:
         v = str(self._d.get("metadata_language") or "EN").strip().upper()
-        if v in ("EN", "AR", "IN"):
+        if v in ("EN", "AR", "HI"):
             return v
         return "EN"
+
+    @property
+    def metadata_source(self) -> str:
+        v = str(self._d.get("metadata_source") or "tmdb").strip().lower()
+        if v in ("tmdb", "tmdb_tvdb", "cinemeta"):
+            return v
+        return "tmdb"
 
     #----- Integers
     @property

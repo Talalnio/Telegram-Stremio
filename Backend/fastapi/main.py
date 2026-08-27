@@ -93,11 +93,13 @@ from Backend.fastapi.routes.api_routes import (
     list_subtitles_api,
     add_subtitles_api,
     remove_subtitle_api,
+    rescan_all_metadata_api,
     restart_app_api,
     revoke_token_api,
     scan_status_api,
     search_catalog_media_api,
     set_media_visibility_api,
+    rescan_all_metadata_api,
     search_media_rescan_api,
     speed_test_api,
     speed_test_stream_api,
@@ -470,6 +472,10 @@ async def apply_media_rescan(
     _: bool = Depends(require_auth)
 ):
     return await apply_media_rescan_api(request, tmdb_id, db_index, media_type)
+
+@app.post("/api/admin/metadata/rescan")
+async def rescan_all_metadata(payload: dict, _: bool = Depends(require_auth)):
+    return await rescan_all_metadata_api(payload)
 
 
 #----- Manual add (custom movie/tv/season/episode/stream)
