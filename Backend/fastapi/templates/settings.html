@@ -375,6 +375,52 @@
                     placeholder="https://your-domain.com">
             </div>
         </div>
+
+        <hr class="divider">
+
+        <!-- Metadata Source -->
+        <div style="margin-bottom:1rem">
+            <label class="s-label" for="metadata_source">METADATA SOURCE</label>
+            <select id="metadata_source" class="s-input" style="cursor:pointer" onchange="onMetadataSourceChange()">
+                <option value="tmdb" {% if settings.metadata_source == 'tmdb' %}selected{% endif %}>TMDB — Movies &amp; TV</option>
+                <option value="tmdb_tvdb" {% if settings.metadata_source == 'tmdb_tvdb' %}selected{% endif %}>TMDB / TVDB — Movies &amp; TV</option>
+                <option value="cinemeta" {% if settings.metadata_source == 'cinemeta' %}selected{% endif %}>Cinemeta</option>
+            </select>
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem">
+                Select the primary source for fetching movie and TV show metadata.
+                TMDB/TVDB combination provides better coverage for some titles.
+                Cinemeta is Stremio's free metadata provider.
+            </p>
+        </div>
+
+        <!-- Metadata Language -->
+        <div style="margin-bottom:1rem" id="metadata-language-wrap">
+            <label class="s-label" for="metadata_language">METADATA LANGUAGE</label>
+            <select id="metadata_language" class="s-input" style="cursor:pointer">
+                <option value="EN" {% if settings.metadata_language == 'EN' %}selected{% endif %}>English (EN)</option>
+                <option value="AR" {% if settings.metadata_language == 'AR' %}selected{% endif %}>Arabic (AR)</option>
+                <option value="HI" {% if settings.metadata_language == 'HI' %}selected{% endif %}>Hindi (HI)</option>
+            </select>
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.3rem" id="metadata-lang-help">
+                Applies to TMDB/TVDB metadata sources. Affects overview/story and genres.
+                <strong>Movie and TV show titles remain unchanged.</strong>
+                Cinemeta ignores this setting and uses its default language.
+            </p>
+        </div>
+
+        <!-- Rescan All Metadata -->
+        <div>
+            <label class="s-label"><i class="fa-solid fa-rotate"></i> RESCAN ALL METADATA</label>
+            <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:0.75rem">
+                Re-fetch and update metadata for all movies and TV shows currently in the library
+                using the selected Metadata Source and Language above.
+            </p>
+            <button type="button" class="add-btn" onclick="confirmRescanMetadata()" style="background:color-mix(in srgb, var(--primary) 20%, transparent);border-color:color-mix(in srgb, var(--primary) 50%, transparent)">
+                <i class="fa-solid fa-arrows-rotate"></i> Rescan All Metadata
+            </button>
+            <div id="rescan-status" style="margin-top:0.75rem;font-size:0.85rem;display:none"></div>
+        </div>
+
         <hr class="divider">
         <div class="grid-2">
             <div>

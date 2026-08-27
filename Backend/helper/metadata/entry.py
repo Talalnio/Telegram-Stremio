@@ -37,6 +37,12 @@ from Backend.helper.split_files import parse_combined_episodes, parse_split_info
 from Backend.logger import LOGGER
 
 
+def _get_metadata_config() -> tuple[str, str]:
+    """Get metadata source and language from settings."""
+    settings = SettingsManager.current()
+    return settings.metadata_source, settings.metadata_language
+
+
 def _is_anime_channel(channel) -> bool:
     anime_channels = SettingsManager.current().anime_channels
     if not anime_channels:
@@ -156,6 +162,9 @@ async def metadata(
 
     default_id = _resolve_default_id(override_id, filename)
 
+    # Get metadata source and language from settings
+    source, language = _get_metadata_config()
+
     try:
         encoded_string = await encode_string({"chat_id": channel, "msg_id": msg_id})
     except Exception:
@@ -190,12 +199,14 @@ async def metadata(
                 result = await resolve_series(
                     title, int(season), int(episode), encoded_string,
                     year=year, quality=quality, default_id=default_id,
+                    source=source, language=language,
                 )
             # Absolute on non-anime channel: still try series with season 1
             if result is None and absolute:
                 result = await resolve_series(
                     title, 1, int(episode), encoded_string,
                     year=year, quality=quality, default_id=default_id,
+                    source=source, language=language,
                 )
                 if result:
                     result["absolute_episode"] = int(episode)
@@ -211,7 +222,8 @@ async def metadata(
                 )
             if result is None:
                 result = await resolve_movie(
-                    title, encoded_string, year=year, quality=quality, default_id=default_id
+                    title, encoded_string, year=year, quality=quality, default_id=default_id,
+                    source=source, language=language,
                 )
         if result is not None:
             if anime_channel:

@@ -21,55 +21,85 @@ async def resolve_movie(
     year=None,
     quality=None,
     default_id=None,
+    source: str = "tmdb",
+    language: str = "EN",
 ) -> Optional[dict]:
     imdb_id, tmdb_id, explicit_imdb, force_tmdb = split_default_id(default_id)
 
-    # Explicit TMDB id
-    if tmdb_id and force_tmdb:
-        movie = await tmdb.details("movie", tmdb_id)
-        if movie:
-            return tmdb.build_movie_payload(movie, quality, encoded_string)
-
-    # Explicit IMDb id → Cinemeta
-    if imdb_id and explicit_imdb:
-        try:
-            detail = await cinemeta.cached_detail(imdb_id, "movie")
-            if detail:
-                return cinemeta.build_movie_payload(detail, imdb_id, title, quality, encoded_string)
-        except Exception as e:
-            LOGGER.warning(f"Cinemeta explicit movie fetch failed [{imdb_id}]: {e}")
-
-    # 1) TMDB first
-    if not tmdb_id:
-        hit = await tmdb.safe_search(title, "movie", year)
-        if hit:
-            tmdb_id = hit.id
-    if tmdb_id:
-        movie = await tmdb.details("movie", tmdb_id)
-        if movie:
-            LOGGER.info(f"[MOVIE] TMDB hit for '{title}' (year={year})")
-            return tmdb.build_movie_payload(movie, quality, encoded_string)
-
-    # 2) Cinemeta fallback
-    LOGGER.info(f"[MOVIE] TMDB miss for '{title}' -> Cinemeta")
-    if not imdb_id:
-        imdb_id = await cinemeta.safe_search(title, "movie", year)
-    if imdb_id:
-        try:
-            detail = await cinemeta.cached_detail(imdb_id, "movie")
-            if detail:
-                sim = title_similarity(title, detail.get("title", ""))
-                if sim >= CINEMETA_THRESHOLD or explicit_imdb:
+    # Use Cinemeta source if specified
+    if source == "cinemeta":
+        # Cinemeta ignores language - uses its default
+        if imdb_id or (imdb_id := await cinemeta.safe_search(title, "movie", year)):
+            try:
+                detail = await cinemeta.cached_detail(imdb_id, "movie")
+                if detail:
                     return cinemeta.build_movie_payload(detail, imdb_id, title, quality, encoded_string)
-                LOGGER.info(
-                    f"[MOVIE] Cinemeta title mismatch for '{title}': "
-                    f"got '{detail.get('title')}' (sim={sim:.2f})"
-                )
-        except Exception as e:
-            LOGGER.warning(f"Cinemeta movie fetch failed [{title}]: {e}")
+            except Exception as e:
+                LOGGER.warning(f"Cinemeta movie fetch failed [{imdb_id}]: {e}")
+        return None
 
-    LOGGER.info(f"[MOVIE] No metadata for '{title}' (year={year})")
-    return None
+    # TMDB source (tmdb or tmdb_tvdb)
+    # Set language for TMDB
+    lang_code = "en-US"
+    if language == "AR":
+        lang_code = "ar-SA"
+    elif language == "HI":
+        lang_code = "hi-IN"
+
+    tmdb_client = tmdb.get_tmdb_client()
+    original_lang = getattr(tmdb_client, 'language', 'en-US')
+    tmdb_client.language = lang_code
+
+    try:
+        # Explicit TMDB id
+        if tmdb_id and force_tmdb:
+            movie = await tmdb_client.details("movie", tmdb_id)
+            if movie:
+                return tmdb.build_movie_payload(movie, quality, encoded_string)
+
+        # Explicit IMDb id → Cinemeta (as fallback)
+        if imdb_id and explicit_imdb:
+            try:
+                detail = await cinemeta.cached_detail(imdb_id, "movie")
+                if detail:
+                    return cinemeta.build_movie_payload(detail, imdb_id, title, quality, encoded_string)
+            except Exception as e:
+                LOGGER.warning(f"Cinemeta explicit movie fetch failed [{imdb_id}]: {e}")
+
+        # 1) TMDB first
+        if not tmdb_id:
+            hit = await tmdb.safe_search(title, "movie", year)
+            if hit:
+                tmdb_id = hit.id
+        if tmdb_id:
+            movie = await tmdb_client.details("movie", tmdb_id)
+            if movie:
+                LOGGER.info(f"[MOVIE] TMDB hit for '{title}' (year={year}, lang={language})")
+                return tmdb.build_movie_payload(movie, quality, encoded_string)
+
+        # 2) Cinemeta fallback
+        LOGGER.info(f"[MOVIE] TMDB miss for '{title}' -> Cinemeta")
+        if not imdb_id:
+            imdb_id = await cinemeta.safe_search(title, "movie", year)
+        if imdb_id:
+            try:
+                detail = await cinemeta.cached_detail(imdb_id, "movie")
+                if detail:
+                    sim = title_similarity(title, detail.get("title", ""))
+                    if sim >= CINEMETA_THRESHOLD or explicit_imdb:
+                        return cinemeta.build_movie_payload(detail, imdb_id, title, quality, encoded_string)
+                    LOGGER.info(
+                        f"[MOVIE] Cinemeta title mismatch for '{title}': "
+                        f"got '{detail.get('title')}' (sim={sim:.2f})"
+                    )
+            except Exception as e:
+                LOGGER.warning(f"Cinemeta movie fetch failed [{title}]: {e}")
+
+        LOGGER.info(f"[MOVIE] No metadata for '{title}' (year={year})")
+        return None
+    finally:
+        # Restore original language
+        tmdb_client.language = original_lang
 
 
 # ── Series: TVDB > Cinemeta > TMDB ────────────────────────────────────────────
