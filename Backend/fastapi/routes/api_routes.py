@@ -247,6 +247,8 @@ async def update_media_api(
                 except (ValueError, TypeError):
                     pass
         update_data = {k: v for k, v in update_data.items() if v != ""}
+        if "title" in update_data:
+            update_data["title_english"] = update_data["title"]
         result = await db.update_document(media_type, tmdb_id, db_index, update_data)
         if result:
             return {"message": "Media updated successfully"}
@@ -1663,7 +1665,7 @@ async def update_catalog_order_api(payload: dict):
     return {"ok": True, "message": "Catalog order saved."}
 
 
-async def get_user_activity_api(page: int = 1, per_page: int = 12):
+async def get_user_activity_api(page: int = 1, per_page: int = 5):
     try:
         return await get_activity_overview(page, per_page)
     except Exception as e:
