@@ -1087,7 +1087,7 @@ async def get_streams(
             streams = filtered
 
     if not streams:
-        return {"streams": []}
+        return {"streams": [_donation()]}
 
     ascending = config.get("quality_sort") == "asc"
     if is_combined:
