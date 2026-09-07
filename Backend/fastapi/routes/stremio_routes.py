@@ -1108,7 +1108,7 @@ async def get_streams(
         if name_count[s["name"]] > 1:
             seen[s["name"]] = seen.get(s["name"], 0) + 1
             s["name"] = f"{s['name']} ({seen[s['name']]})"
-#    streams.insert(0, _donation())
+    streams.insert(0, _donation())
     return {"streams": streams}
 
 #----- Configure/install landing page rendered as HTML for a token
