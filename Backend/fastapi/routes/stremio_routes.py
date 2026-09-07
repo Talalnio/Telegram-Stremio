@@ -34,7 +34,7 @@ ADDON_NAME = "TG"
 ADDON_VERSION = __version__
 PAGE_SIZE = 15
 
- def _donation():
+def _donation():
     return {"name": "⭐ Donation needed.", "title": "Click here to donate to keep the project alive.", "externalUrl": "https://donate.weebzonex.workers.dev"}
 
 def build_proxy_url(original_url: str) -> str | None:
