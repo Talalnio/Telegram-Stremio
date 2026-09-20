@@ -545,7 +545,7 @@ async function searchManualSession() {
                 : `<span class="c-id">${escapeHtml(String(r.year || '—'))} · New · ${escapeHtml(String(r.source || '').toUpperCase())} · ${escapeHtml(String(r.selected_id || ''))}</span>`;
             return `
             <label class="chip" onclick="pickManualResult(${i})">
-                <img src="${escapeHtmlAttr(r.poster) || '/static/placeholder.jpg'}" onerror="this.src='/static/placeholder.jpg'"
+                <img src="${escapeHtmlAttr(r.poster) || '/static/placeholder.svg'}" onerror="this.onerror=null; this.src='/static/placeholder.svg'"
                      style="width:2.25rem;height:3.25rem;object-fit:cover;border-radius:0.35rem;flex-shrink:0;background:var(--card)">
                 <span class="min-w-0">
                     <span class="c-name block truncate">${escapeHtml(r.title)}
@@ -568,7 +568,7 @@ function pickManualResult(i) {
     const isPersonal = !!r.is_personal;
     const isTv = r.media_type === 'tv';
 
-    document.getElementById('ms-sel-poster').src = r.poster || '/static/placeholder.jpg';
+    document.getElementById('ms-sel-poster').src = r.poster || '/static/placeholder.svg';
     document.getElementById('ms-sel-title').textContent = r.title;
     const locationText = r.in_library ? `TMDB ${r.tmdb_id} · DB #${r.db_index}` : `New · ${String(r.source || '').toUpperCase()} ${r.selected_id || ''}`;
     document.getElementById('ms-sel-sub').textContent =

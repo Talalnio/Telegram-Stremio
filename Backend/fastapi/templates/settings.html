@@ -369,6 +369,26 @@
                     placeholder="TheTVDB v4 API key (series priority)" spellcheck="false">
             </div>
             <div>
+                <label class="s-label" for="metadata_language">Metadata Language</label>
+                <select id="metadata_language" class="s-input">
+                    <option value="en" {% if settings.metadata_language == 'en' %}selected{% endif %}>English (Default)</option>
+                    <option value="ar" {% if settings.metadata_language == 'ar' %}selected{% endif %}>Arabic (العربية)</option>
+                </select>
+                <p style="font-size:0.78rem;color:var(--text-sec);margin:0.4rem 0 0 0;line-height:1.35">
+                    Language used when fetching movie/show descriptions. Some titles may not have a translation — those fall back to English automatically.
+                </p>
+            </div>
+            <div>
+                <label class="s-label" for="metadata_language_scope">Metadata Language Scope</label>
+                <select id="metadata_language_scope" class="s-input">
+                    <option value="all" {% if settings.metadata_language_scope == 'all' %}selected{% endif %}>All Information</option>
+                    <option value="description_only" {% if settings.metadata_language_scope == 'description_only' %}selected{% endif %}>Description Only</option>
+                </select>
+                <p style="font-size:0.78rem;color:var(--text-sec);margin:0.4rem 0 0 0;line-height:1.35">
+                    Description Only: only the plot/overview/episode plot fields are translated; titles, genres and cast stay in English.
+                </p>
+            </div>
+            <div>
                 <label class="s-label" for="base_url">Base URL</label>
                 <input type="url" id="base_url" class="s-input"
                     value="{{ settings.base_url }}"
@@ -1500,6 +1520,8 @@ async function saveSettings() {
         fanart_low_res_poster:         document.getElementById('fanart_low_res_poster').checked,
         upstream_repo:                 document.getElementById('upstream_repo').value.trim(),
         upstream_branch:               document.getElementById('upstream_branch').value.trim(),
+        metadata_language:             document.getElementById('metadata_language').value.trim().toLowerCase() || 'en',
+        metadata_language_scope:       document.getElementById('metadata_language_scope').value.trim().toLowerCase() || 'all',
         auth_channels:                 collectList('auth_channels'),
         anime_channels:                collectAnimeChannels(),
         subscription:                  document.getElementById('subscription').checked,
@@ -1651,6 +1673,8 @@ function renderSettings(s) {
     toggleFanartShuffle();
     document.getElementById('upstream_repo').value = s.upstream_repo || '';
     document.getElementById('upstream_branch').value = s.upstream_branch || '';
+    document.getElementById('metadata_language').value = (s.metadata_language || 'en').toLowerCase();
+    document.getElementById('metadata_language_scope').value = (s.metadata_language_scope || 'all').toLowerCase();
     document.getElementById('subscription_group_id').value = s.subscription_group_id || 0;
     document.getElementById('http_proxy_url').value = s.http_proxy_url || '';
     document.getElementById('mediaflow_proxy').checked = !!s.mediaflow_proxy;

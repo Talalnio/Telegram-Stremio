@@ -289,7 +289,7 @@
     return `
         <div class="group overflow-hidden rounded-3xl glass-panel border border-hairline hover:border-primary/30 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl">
             <div class="relative overflow-hidden">
-                <img src="${poster}" alt="${title}" class="w-full aspect-[2/3] object-cover transition duration-300 group-hover:scale-105" onerror="this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'" loading="lazy">
+                <img src="${poster}" alt="${title}" class="w-full aspect-[2/3] object-cover transition duration-300 group-hover:scale-105" onerror="this.onerror=null; this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'" loading="lazy">
                 <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
                 <div class="absolute top-3 left-3">
@@ -724,7 +724,7 @@
             state.textContent = `Found ${maSearchList.length} match${maSearchList.length > 1 ? 'es' : ''}. Pick one to auto-fill.`;
             box.innerHTML = maSearchList.map((r, i) => `
                 <button type="button" class="ma-result-row" onclick="maPickResult(${i})">
-                    <img class="ma-result-poster" src="${maEsc(r.poster) || '/static/placeholder.jpg'}" onerror="this.src='/static/placeholder.jpg'">
+                    <img class="ma-result-poster" src="${maEsc(r.poster) || '/static/placeholder.svg'}" onerror="this.onerror=null; this.src='/static/placeholder.svg'">
                     <span class="ma-result-meta">
                         <span class="flex items-center gap-2">
                             <span class="text-sm font-bold text-white truncate">${maEsc(r.title)}</span>

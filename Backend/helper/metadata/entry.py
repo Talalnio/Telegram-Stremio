@@ -65,6 +65,13 @@ async def metadata(
     override_id: str = None,
     season_hint: int = None,
 ) -> dict | None:
+    try:
+        _s = SettingsManager.current()
+        _lang = _s.metadata_language
+        _scope = _s.metadata_language_scope
+    except Exception:
+        _lang, _scope = "en", "all"
+
     if is_multipart_video(filename):
         LOGGER.info(f"Skipping {filename}: split video file not meant to be combined in Stremio")
         return None
@@ -185,17 +192,20 @@ async def metadata(
                 result = await resolve_anime_tv(
                     title, season, int(episode), encoded_string,
                     year=year, quality=quality, absolute=absolute,
+                    metadata_language=_lang, metadata_language_scope=_scope,
                 )
             if result is None and not absolute:
                 result = await resolve_series(
                     title, int(season), int(episode), encoded_string,
                     year=year, quality=quality, default_id=default_id,
+                    metadata_language=_lang, metadata_language_scope=_scope,
                 )
             # Absolute on non-anime channel: still try series with season 1
             if result is None and absolute:
                 result = await resolve_series(
                     title, 1, int(episode), encoded_string,
                     year=year, quality=quality, default_id=default_id,
+                    metadata_language=_lang, metadata_language_scope=_scope,
                 )
                 if result:
                     result["absolute_episode"] = int(episode)
@@ -207,11 +217,13 @@ async def metadata(
             result = None
             if not default_id and anime_channel:
                 result = await resolve_anime_movie(
-                    title, encoded_string, year=year, quality=quality
+                    title, encoded_string, year=year, quality=quality,
+                    metadata_language=_lang, metadata_language_scope=_scope,
                 )
             if result is None:
                 result = await resolve_movie(
-                    title, encoded_string, year=year, quality=quality, default_id=default_id
+                    title, encoded_string, year=year, quality=quality, default_id=default_id,
+                    metadata_language=_lang, metadata_language_scope=_scope,
                 )
         if result is not None:
             if anime_channel:
@@ -409,8 +421,15 @@ async def fetch_selected_movie_metadata(selected_id: str) -> dict | None:
     selected_id = str(selected_id).strip()
     if not selected_id:
         return None
+    try:
+        _s = SettingsManager.current()
+        _lang = _s.metadata_language
+        _scope = _s.metadata_language_scope
+    except Exception:
+        _lang, _scope = "en", "all"
     data = await resolve_movie(
-        title="manual-rescan", encoded_string=None, year=None, quality=None, default_id=selected_id
+        title="manual-rescan", encoded_string=None, year=None, quality=None, default_id=selected_id,
+        metadata_language=_lang, metadata_language_scope=_scope,
     )
     return _to_selection_payload(data, "movie") if data else None
 
@@ -420,6 +439,13 @@ async def fetch_selected_tv_metadata(selected_id: str) -> dict | None:
     imdb_id, tmdb_id, _, use_tmdb = split_default_id(selected_id)
     if not imdb_id and not tmdb_id:
         return None
+
+    try:
+        _s = SettingsManager.current()
+        _lang = _s.metadata_language
+        _scope = _s.metadata_language_scope
+    except Exception:
+        _lang, _scope = "en", "all"
 
     imdb_tv = None
     if imdb_id and not use_tmdb:
@@ -437,31 +463,70 @@ async def fetch_selected_tv_metadata(selected_id: str) -> dict | None:
                 tmdb_id = None
         if not tmdb_id:
             return None
-        tv = await tmdb.details("tv", tmdb_id)
-        if not tv:
+
+        def _build_tv_payload(tv_obj) -> dict:
+            fa = getattr(tv_obj, "first_air_date", None)
+            rt = ""
+            if getattr(tv_obj, "episode_run_time", None):
+                rt = f"{tv_obj.episode_run_time[0]} min"
+            return {
+                "tmdb_id": tv_obj.id,
+                "imdb_id": getattr(getattr(tv_obj, "external_ids", None), "imdb_id", None),
+                "title": tv_obj.name,
+                "release_year": getattr(fa, "year", 0) if fa else 0,
+                "rating": getattr(tv_obj, "vote_average", 0) or 0,
+                "description": tv_obj.overview or "",
+                "poster": format_tmdb_image(tv_obj.poster_path),
+                "backdrop": format_tmdb_image(tv_obj.backdrop_path, "original"),
+                "logo": tmdb.get_tmdb_logo(getattr(tv_obj, "images", None)),
+                "genres": [g.name for g in (getattr(tv_obj, "genres", None) or [])],
+                "cast": [
+                    getattr(c, "name", None) or getattr(c, "original_name", None)
+                    for c in (getattr(getattr(tv_obj, "credits", None), "cast", None) or [])
+                ],
+                "runtime": str(rt),
+                "media_type": "tv",
+            }
+
+        def _non_empty_text(v):
+            return isinstance(v, str) and v.strip() != ""
+
+        def _non_empty_list(v):
+            return isinstance(v, list) and len(v) > 0
+
+        tv_en = await tmdb.details("tv", tmdb_id, language="en")
+        if not tv_en:
             return None
-        first_air = getattr(tv, "first_air_date", None)
-        runtime = ""
-        if getattr(tv, "episode_run_time", None):
-            runtime = f"{tv.episode_run_time[0]} min"
-        return {
-            "tmdb_id": tv.id,
-            "imdb_id": getattr(getattr(tv, "external_ids", None), "imdb_id", None),
-            "title": tv.name,
-            "release_year": getattr(first_air, "year", 0) if first_air else 0,
-            "rating": getattr(tv, "vote_average", 0) or 0,
-            "description": tv.overview or "",
-            "poster": format_tmdb_image(tv.poster_path),
-            "backdrop": format_tmdb_image(tv.backdrop_path, "original"),
-            "logo": tmdb.get_tmdb_logo(getattr(tv, "images", None)),
-            "genres": [g.name for g in (tv.genres or [])],
-            "cast": [
-                getattr(c, "name", None) or getattr(c, "original_name", None)
-                for c in (getattr(getattr(tv, "credits", None), "cast", None) or [])
-            ],
-            "runtime": str(runtime),
-            "media_type": "tv",
-        }
+        base_payload = _build_tv_payload(tv_en)
+
+        if _lang == "en":
+            return base_payload
+
+        localized_payload = None
+        try:
+            tv_loc = await tmdb.details("tv", tmdb_id, language=_lang)
+            if tv_loc:
+                localized_payload = _build_tv_payload(tv_loc)
+        except Exception:
+            localized_payload = None
+
+        if localized_payload is None:
+            return base_payload
+
+        if _scope == "all":
+            result = dict(base_payload)
+            for _k in ("title", "description", "runtime"):
+                if _non_empty_text(localized_payload.get(_k)):
+                    result[_k] = localized_payload[_k]
+            for _k in ("genres", "cast"):
+                if _non_empty_list(localized_payload.get(_k)):
+                    result[_k] = list(localized_payload[_k])
+            return result
+        else:
+            result = dict(base_payload)
+            if _non_empty_text(localized_payload.get("description")):
+                result["description"] = localized_payload["description"]
+            return result
 
     images = format_imdb_images(imdb_id)
     return {

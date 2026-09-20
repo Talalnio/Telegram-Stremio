@@ -53,6 +53,8 @@ _DEFAULTS: Dict[str, Any] = {
     "fanart_shuffle": False,
     "fanart_shuffle_interval": 5,
     "fanart_low_res_poster": True,
+    "metadata_language": "en",
+    "metadata_language_scope": "all",
 }
 
 
@@ -79,6 +81,8 @@ def _seed_from_env() -> Dict[str, Any]:
         "show_proxy_and_non_proxy_both": Telegram.SHOW_PROXY_AND_NON_PROXY_BOTH,
         "multi_tokens":                 [],
         "extra_databases":              list(Telegram.DATABASE[2:]) if len(Telegram.DATABASE) > 2 else [],
+        "metadata_language":            getattr(Telegram, "METADATA_LANGUAGE", "en") or "en",
+        "metadata_language_scope":      getattr(Telegram, "METADATA_LANGUAGE_SCOPE", "all") or "all",
     })
     return seed
 
@@ -244,6 +248,21 @@ class Settings:
     @property
     def fanart_low_res_poster(self) -> bool:
         return bool(self._d.get("fanart_low_res_poster", True))
+
+    #----- Metadata localization
+    @property
+    def metadata_language(self) -> str:
+        raw = str(self._d.get("metadata_language") or "en").strip().lower()
+        if raw not in ("en", "ar"):
+            return "en"
+        return raw
+
+    @property
+    def metadata_language_scope(self) -> str:
+        raw = str(self._d.get("metadata_language_scope") or "all").strip().lower()
+        if raw not in ("all", "description_only"):
+            return "all"
+        return raw
 
     #----- Integers
     @property

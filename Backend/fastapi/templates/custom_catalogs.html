@@ -743,7 +743,7 @@ function mediaCard(item, actionHtml) {
   const mediaType = item.media_type === 'tv' ? 'Series' : 'Movie';
   const genres = Array.isArray(item.genres) ? item.genres.slice(0, 2).join(' · ') : '';
   return `<div class="media-card p-3 flex gap-3">
-    <img src="${escapeHtml(posterOrFallback(item))}" class="poster" onerror="this.src='https://via.placeholder.com/120x180/111827/94a3b8?text=No+Poster'" alt="Poster">
+    <img src="${escapeHtml(posterOrFallback(item))}" class="poster" onerror="this.onerror=null; this.src='https://via.placeholder.com/120x180/111827/94a3b8?text=No+Poster'" alt="Poster">
     <div class="min-w-0 flex-1">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">

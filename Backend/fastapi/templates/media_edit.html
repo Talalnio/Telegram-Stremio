@@ -332,10 +332,10 @@
             <div class="relative z-10 p-5 sm:p-6 lg:p-8">
                 <div class="flex flex-col md:flex-row md:items-end gap-5 sm:gap-6">
                     <div class="mx-auto md:mx-0 flex-shrink-0">
-                        <img src="{{ cover_url(media_details.poster) or '/static/placeholder.jpg' }}"
+                        <img src="{{ cover_url(media_details.poster) or '/static/placeholder.svg' }}"
                              alt="{{ media_details.title }}"
                              class="w-36 sm:w-40 md:w-48 h-54 sm:h-60 md:h-72 object-cover rounded-2xl shadow-2xl border border-hairline-strong"
-                             onerror="this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'">
+                             onerror="this.onerror=null; this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'">
                     </div>
 
                     <div class="flex-1 min-w-0 text-center md:text-left">
@@ -421,7 +421,7 @@
 
         <div id="rescan-preview" class="hidden mt-5 rounded-3xl border border-hairline bg-surface p-4 sm:p-5">
             <div class="flex items-start gap-4">
-                <img id="rescan-preview-poster" src="/static/placeholder.jpg" alt="Selected poster" class="match-thumb">
+                <img id="rescan-preview-poster" src="/static/placeholder.svg" alt="Selected poster" class="match-thumb">
                 <div class="min-w-0 flex-1">
                     <h4 id="rescan-preview-title" class="text-white font-bold text-lg"></h4>
                     <p id="rescan-preview-subtitle" class="muted text-sm mt-1"></p>
@@ -936,7 +936,7 @@
         document.getElementById('rescan-preview-title').textContent = item.title || 'Unknown title';
         document.getElementById('rescan-preview-subtitle').textContent = `${item.subtitle || 'Match'}${item.year ? ` • ${item.year}` : ''}`;
         document.getElementById('rescan-preview-ids').textContent = `IMDb: ${item.imdb_id || 'N/A'} • TMDb: ${item.tmdb_id || 'N/A'}`;
-        document.getElementById('rescan-preview-poster').src = item.poster || '/static/placeholder.jpg';
+        document.getElementById('rescan-preview-poster').src = item.poster || '/static/placeholder.svg';
         document.getElementById('rescan-preview').classList.remove('hidden');
     }
 
@@ -993,10 +993,10 @@
                 >
                     <div class="flex items-start gap-4">
                         <img
-                            src="${item.poster || '/static/placeholder.jpg'}"
+                            src="${item.poster || '/static/placeholder.svg'}"
                             alt="${escapeHtml(item.title || 'Poster')}"
                             class="match-thumb"
-                            onerror="this.src='/static/placeholder.jpg'"
+                            onerror="this.onerror=null; this.src='/static/placeholder.svg'"
                         >
                         <div class="min-w-0 flex-1">
                             <div class="flex flex-wrap items-center gap-2">

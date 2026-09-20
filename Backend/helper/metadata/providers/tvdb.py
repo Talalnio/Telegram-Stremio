@@ -43,6 +43,14 @@ async def _imdb_fallback_rating(imdb_id: Optional[str], media_type: str) -> floa
 BASE = "https://api4.thetvdb.com/v4"
 ARTWORK_BASE = "https://artworks.thetvdb.com"
 
+_TVDB_LANGUAGE_MAP: Dict[str, str] = {
+    "en": "eng",
+    "ar": "ara",
+}
+
+def _tvdb_lang_code(lang: str) -> str:
+    return _TVDB_LANGUAGE_MAP.get((lang or "en").strip().lower(), "eng")
+
 _client: Optional[httpx.AsyncClient] = None
 _client_lock = asyncio.Lock()
 _token: Optional[str] = None
@@ -329,11 +337,12 @@ async def episode_translation(
     episode_id: int,
     lang: str = "eng",
 ) -> Optional[dict]:
-    """Fetch episode translation, defaulting to English."""
+    """Fetch episode translation. lang may be a short code ("en"/"ar") or TVDB 3-letter code."""
     if not episode_id:
         return None
-    # Always use TVDB's English language code.
-    lang = "eng"
+    # Support both short ("en"/"ar") and 3-letter ("eng"/"ara") inputs.
+    if len(lang) <= 2:
+        lang = _tvdb_lang_code(lang)
 
     cache_key = f"tvdb_ep_tr::{episode_id}::{lang}"
 
@@ -405,27 +414,45 @@ def _remote_ids(doc: dict) -> tuple:
 
 
 def _english_translation(doc: dict) -> tuple[Optional[str], Optional[str]]:
+    return _translation_by_lang(doc, "eng")
+
+
+def _translation_by_lang(doc: dict, lang_code: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (localized_name, localized_overview) for a TVDB translations dict.
+
+    ``lang_code`` is the TVDB 3-letter code (e.g. "eng" or "ara"). Always falls
+    back to English if the requested language is missing — so callers never
+    receive ``(None, None)`` when English data is present.
+    """
     tr = doc.get("translations") or {}
+    lang_code = (lang_code or "eng").strip().lower()
+    fallback_codes = [lang_code]
+    if lang_code != "eng":
+        fallback_codes.extend(["eng", "en"])
+    name = None
+    overview = None
 
-    eng_name = None
-    for item in tr.get("nameTranslations") or []:
-        if not isinstance(item, dict):
-            continue
+    for code in fallback_codes:
+        for item in tr.get("nameTranslations") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("language") or "").lower() == code:
+                name = item.get("name") or name
+                break
+        if name:
+            break
 
-        language = str(item.get("language") or "").lower()
-        if language in ("eng", "en"):
-            eng_name = item.get("name") or eng_name
+    for code in fallback_codes:
+        for item in tr.get("overviewTranslations") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("language") or "").lower() == code:
+                overview = item.get("overview") or overview
+                break
+        if overview:
+            break
 
-    eng_overview = None
-    for item in tr.get("overviewTranslations") or []:
-        if not isinstance(item, dict):
-            continue
-
-        language = str(item.get("language") or "").lower()
-        if language in ("eng", "en"):
-            eng_overview = item.get("overview") or eng_overview
-
-    return eng_name, eng_overview
+    return name, overview
 
 
 def _genres(doc: dict) -> list:
@@ -444,17 +471,22 @@ async def build_series_payload(
     episode: int,
     quality,
     encoded_string,
+    *,
+    language: str = "en",
+    language_scope: str = "all",
 ) -> dict:
     imdb_id, tmdb_id = _remote_ids(series)
     artworks = series.get("artworks") or []
+    lang_3 = _tvdb_lang_code(language)
+    scope = "description_only" if str(language_scope or "all").lower() == "description_only" else "all"
     imdb_images = format_imdb_images(imdb_id)
     poster = (
-        _pick_artwork(artworks, {2, 14, 27})
+        _pick_artwork(artworks, {2, 14, 27}, prefer_lang=lang_3)
         or _art_url(series.get("image") or "")
         or imdb_images["poster"]
     )
     backdrop = (
-        _pick_artwork(artworks, {3, 15, 19})
+        _pick_artwork(artworks, {3, 15, 19}, prefer_lang=lang_3)
         or _art_url(series.get("background") or "")
         or imdb_images["backdrop"]
     )
@@ -476,21 +508,36 @@ async def build_series_payload(
     ep_image = _art_url((ep or {}).get("image") or "")
     ep_overview = (ep or {}).get("overview") or ""
     ep_aired = (ep or {}).get("aired") or (ep or {}).get("firstAired") or ""
-    title = series.get("name") or series.get("slug") or ""
+    base_title = series.get("name") or series.get("slug") or ""
+    # Always pull English first so we have a reliable fall-back for every field.
     eng_name, eng_overview = _english_translation(series)
     ep_eng_name, ep_eng_overview = _english_translation(ep or {})
-    ep_title = ep_eng_name or ep_title
-    ep_overview = ep_eng_overview or ep_overview
+    # Pull requested-language translations (falls back to English inside the helper).
+    loc_name, loc_overview = _translation_by_lang(series, lang_3)
+    ep_loc_name, ep_loc_overview = _translation_by_lang(ep or {}, lang_3)
+    # Decide final titles/descriptions based on language_scope:
+    #   - "all"             : use requested language, field-level fallback to English.
+    #   - "description_only": titles ALWAYS English; only descriptions use requested language.
+    if scope == "all":
+        final_title = loc_name or eng_name or base_title
+        final_description = loc_overview or eng_overview or series.get("overview") or ""
+        final_ep_title = (ep_loc_name or ep_eng_name or ep_title)
+        final_ep_overview = (ep_loc_overview or ep_eng_overview or ep_overview)
+    else:
+        final_title = eng_name or base_title
+        final_description = loc_overview or eng_overview or series.get("overview") or ""
+        final_ep_title = ep_eng_name or ep_title
+        final_ep_overview = (ep_loc_overview or ep_eng_overview or ep_overview)
     payload = {
         "tmdb_id": tmdb_id,
         "imdb_id": imdb_id,
-        "title": eng_name or title,
-        "title_english": eng_name or title,
+        "title": final_title,
+        "title_english": eng_name or base_title,
         "original_title": series.get("name") or "",
         "year": year,
         "year_end": year_end,
         "rate": rate,
-        "description": eng_overview or series.get("overview") or "",
+        "description": final_description,
         "poster": poster,
         "backdrop": backdrop,
         "logo": logo,
@@ -502,9 +549,9 @@ async def build_series_payload(
         "origin_country": list(series.get("originalCountry") or []) if isinstance(series.get("originalCountry"), list) else ([series["originalCountry"]] if series.get("originalCountry") else []),
         "season_number": season,
         "episode_number": episode,
-        "episode_title": ep_title,
+        "episode_title": final_ep_title,
         "episode_backdrop": ep_image,
-        "episode_overview": ep_overview,
+        "episode_overview": final_ep_overview,
         "episode_released": str(ep_aired),
         "quality": quality,
         "encoded_string": encoded_string,
@@ -513,16 +560,18 @@ async def build_series_payload(
     return ensure_media_ids(payload, seed=f"tvdb:{series.get('id')}")
 
 
-async def build_movie_payload(movie: dict, quality, encoded_string) -> dict:
+async def build_movie_payload(movie: dict, quality, encoded_string, *, language: str = "en", language_scope: str = "all") -> dict:
     imdb_id, tmdb_id = _remote_ids(movie)
     artworks = movie.get("artworks") or []
+    lang_3 = _tvdb_lang_code(language)
+    scope = "description_only" if str(language_scope or "all").lower() == "description_only" else "all"
     imdb_images = format_imdb_images(imdb_id)
     poster = (
-        _pick_artwork(artworks, {14, 2})
+        _pick_artwork(artworks, {14, 2}, prefer_lang=lang_3)
         or _art_url(movie.get("image") or "")
         or imdb_images["poster"]
     )
-    backdrop = _pick_artwork(artworks, {15, 3}) or imdb_images["backdrop"]
+    backdrop = _pick_artwork(artworks, {15, 3}, prefer_lang=lang_3) or imdb_images["backdrop"]
     logo = _pick_artwork(artworks, {25, 23}) or logo_from_imdb(imdb_id)
     year, year_end = parse_year_range(movie.get("year") or movie.get("releaseDate"), None)
     rate = normalize_rating(
@@ -533,18 +582,25 @@ async def build_movie_payload(movie: dict, quality, encoded_string) -> dict:
     if not rate:
         rate = await _imdb_fallback_rating(imdb_id, "movie")
     runtime = movie.get("runtime")
-    title = movie.get("name") or movie.get("slug") or ""
+    base_title = movie.get("name") or movie.get("slug") or ""
     eng_name, eng_overview = _english_translation(movie)
+    loc_name, loc_overview = _translation_by_lang(movie, lang_3)
+    if scope == "all":
+        final_title = loc_name or eng_name or base_title
+        final_description = loc_overview or eng_overview or movie.get("overview") or ""
+    else:
+        final_title = eng_name or base_title
+        final_description = loc_overview or eng_overview or movie.get("overview") or ""
     payload = {
         "tmdb_id": tmdb_id,
         "imdb_id": imdb_id,
-        "title": eng_name or title,
-        "title_english": eng_name or title,
+        "title": final_title,
+        "title_english": eng_name or base_title,
         "original_title": movie.get("name") or "",
         "year": year,
         "year_end": year_end,
         "rate": rate,
-        "description": eng_overview or movie.get("overview") or "",
+        "description": final_description,
         "poster": poster,
         "backdrop": backdrop,
         "logo": logo,
@@ -559,7 +615,7 @@ async def build_movie_payload(movie: dict, quality, encoded_string) -> dict:
     return ensure_media_ids(payload, seed=f"tvdb:{movie.get('id')}")
 
 
-async def fetch_series_metadata(title, season, episode, encoded_string, year=None, quality=None) -> Optional[dict]:
+async def fetch_series_metadata(title, season, episode, encoded_string, year=None, quality=None, *, language: str = "en", language_scope: str = "all") -> Optional[dict]:
     hit = await search(title, year=year, entity="series")
     if not hit:
         return None
@@ -582,17 +638,17 @@ async def fetch_series_metadata(title, season, episode, encoded_string, year=Non
     ep = await episode_by_number(tvdb_id, season, episode)
     if ep and ep.get("id"):
         try:
-            ep_tr = await episode_translation(ep["id"])
+            ep_tr = await episode_translation(ep["id"], lang=language)
             if ep_tr:
                 ep = dict(ep)
                 ep["name"] = ep_tr.get("name") or ep.get("name")
                 ep["overview"] = ep_tr.get("overview") or ep.get("overview")
         except Exception as e:
             LOGGER.debug(f"[TVDB] episode translation fetch failed for {ep.get('id')}: {e}")
-    return await build_series_payload(series, ep, season, episode, quality, encoded_string)
+    return await build_series_payload(series, ep, season, episode, quality, encoded_string, language=language, language_scope=language_scope)
 
 
-async def fetch_movie_metadata(title, encoded_string, year=None, quality=None) -> Optional[dict]:
+async def fetch_movie_metadata(title, encoded_string, year=None, quality=None, *, language: str = "en", language_scope: str = "all") -> Optional[dict]:
     hit = await search(title, year=year, entity="movie")
     if not hit:
         return None
@@ -611,4 +667,4 @@ async def fetch_movie_metadata(title, encoded_string, year=None, quality=None) -
             "image": hit.get("image_url") or hit.get("image"),
             "remoteIds": hit.get("remote_ids") or [],
         }
-    return await build_movie_payload(movie, quality, encoded_string)
+    return await build_movie_payload(movie, quality, encoded_string, language=language, language_scope=language_scope)

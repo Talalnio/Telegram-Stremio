@@ -1,7 +1,7 @@
 """TMDb metadata provider."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 from themoviedb import aioTMDb
 
@@ -27,8 +27,17 @@ from Backend.helper.metadata.common import (
 from Backend.helper.settings_manager import SettingsManager
 from Backend.logger import LOGGER
 
-_tmdb_client: aioTMDb | None = None
+_tmdb_clients: Dict[str, aioTMDb] = {}
 _tmdb_client_key: str | None = None
+_TMDB_LANGUAGE_MAP: Dict[str, str] = {
+    "en": "en-US",
+    "ar": "ar-SA",
+}
+
+
+def _tmdb_language_tag(lang: str) -> str:
+    """Convert short language code (en/ar) to TMDB language tag (en-US / ar-SA)."""
+    return _TMDB_LANGUAGE_MAP.get((lang or "en").strip().lower(), "en-US")
 
 
 def tmdb_api_key() -> str:
@@ -41,13 +50,22 @@ def tmdb_api_key() -> str:
     return getattr(Telegram, "TMDB_API", "") or ""
 
 
-def get_tmdb_client() -> aioTMDb:
-    global _tmdb_client, _tmdb_client_key
+def get_tmdb_client(language: str = "en-US") -> aioTMDb:
+    """Return a language-specific shared TMDB client.
+
+    A different client instance is kept per language tag so that concurrent
+    requests for different languages never mutate a shared ``language``
+    attribute. Callers that do not specify a language get the classic
+    ``en-US`` client (100% backward compatible behaviour).
+    """
+    global _tmdb_clients, _tmdb_client_key
     current_key = tmdb_api_key()
-    if _tmdb_client is None or _tmdb_client_key != current_key:
-        _tmdb_client = aioTMDb(key=current_key, language="en-US", region="US")
+    if _tmdb_client_key != current_key:
+        _tmdb_clients.clear()
         _tmdb_client_key = current_key
-    return _tmdb_client
+    if language not in _tmdb_clients:
+        _tmdb_clients[language] = aioTMDb(key=current_key, language=language, region="US")
+    return _tmdb_clients[language]
 
 
 def get_tmdb_logo(images) -> str:
@@ -92,7 +110,9 @@ def tmdb_title_year(item, media_type: str) -> tuple:
 
 
 async def raw_search(title: str, media_type: str, year: Optional[int]):
-    client = get_tmdb_client()
+    # Search is ALWAYS forced to en-US to keep title-matching accuracy high.
+    # Localization happens later at the details layer once we know the correct id.
+    client = get_tmdb_client("en-US")
     async with API_SEMAPHORE:
         if media_type == "movie":
             results = await (
@@ -193,31 +213,33 @@ async def safe_search(title: str, type_: str, year: Optional[int] = None):
     return await cached_call(TMDB_SEARCH_CACHE, cache_key, "tmdb_search", _produce)
 
 
-async def details(media_type: str, item_id):
-    cache_key = (media_type, item_id)
+async def details(media_type: str, item_id, language: str = "en"):
+    lang_tag = _tmdb_language_tag(language)
+    cache_key = (lang_tag, media_type, item_id)
 
     async def _produce():
         try:
-            client = get_tmdb_client()
+            client = get_tmdb_client(lang_tag)
             async with API_SEMAPHORE:
                 target = client.movie(item_id) if media_type == "movie" else client.tv(item_id)
                 det = await target.details(append_to_response="external_ids,credits")
                 det.images = await target.images()
             return det
         except Exception as e:
-            LOGGER.warning(f"TMDb {media_type} details fetch failed for id={item_id}: {e}")
+            LOGGER.warning(f"TMDb {media_type} details fetch failed for id={item_id} [lang={lang_tag}]: {e}")
             return None
 
     return await cached_call(TMDB_DETAILS_CACHE, cache_key, "tmdb_details", _produce)
 
 
-async def episode_details(tv_id, season, episode):
-    key = (tv_id, season, episode)
+async def episode_details(tv_id, season, episode, language: str = "en"):
+    lang_tag = _tmdb_language_tag(language)
+    key = (lang_tag, tv_id, season, episode)
 
     async def _produce():
         try:
             async with API_SEMAPHORE:
-                return await get_tmdb_client().episode(tv_id, season, episode).details()
+                return await get_tmdb_client(lang_tag).episode(tv_id, season, episode).details()
         except Exception:
             return None
 
