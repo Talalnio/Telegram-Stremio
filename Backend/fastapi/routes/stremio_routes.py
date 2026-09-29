@@ -307,40 +307,201 @@ def format_released_date(media):
     return None
 
 
-#----- Build a Stremio stream display name/title from a filename
+#----- Build a compact, release-aware Stremio stream display from a filename
 def format_stream_details(filename: str, quality: str, size: str, is_split: bool = False) -> tuple[str, str]:
-    size_emoji = "📦" if is_split else "💾"
+    """Build a BetterFormatter-style Stremio label from common release names.
+
+    PTN is kept as a compatibility fallback. Regex detection is intentionally
+    tolerant of dots, spaces, underscores and hyphens used by release groups.
+    Unknown metadata is omitted rather than guessed.
+    """
+    raw = str(filename or "")
+    # Keep dots in `raw` (5.1 / 7.1 need them). `words` is only for token matching.
+    words = re.sub(r"[._]+", " ", raw)
+
     try:
-        parsed = PTN.parse(filename)
+        parsed = PTN.parse(raw) or {}
     except Exception:
-        return (f"[TG⚡]  {quality}", f"📁 {filename}\n{size_emoji} {size}")
+        parsed = {}
 
-    codec_parts = []
-    if parsed.get("codec"):
-        codec_parts.append(f"🎥 {parsed.get('codec')}")
-    if parsed.get("bitDepth"):
-        codec_parts.append(f"🌈 {parsed.get('bitDepth')}bit")
-    if parsed.get("audio"):
-        codec_parts.append(f"🔊 {parsed.get('audio')}")
-    if parsed.get("encoder"):
-        codec_parts.append(f"👤 {parsed.get('encoder')}")
+    def match(pattern: str, text: str = raw):
+        return re.search(pattern, text, flags=re.IGNORECASE)
 
-    codec_info = " ".join(codec_parts) if codec_parts else ""
+    def has(pattern: str, text: str = raw) -> bool:
+        return match(pattern, text) is not None
 
-    resolution = parsed.get("resolution", quality)
-    quality_type = parsed.get("quality", "")
-    stream_name = f"TG {resolution} {quality_type}".strip()
+    # Resolution: explicit release token first, then PTN/project quality.
+    resolution = ""
+    resolution_sources = f"{raw} {parsed.get('resolution') or ''} {quality or ''}"
+    resolution_checks = (
+        (r"(?<!\d)(?:4320p|8k)(?!\d)", "8K Ultra HD"),
+        (r"(?<!\d)(?:2160p|4k|uhd)(?!\d)", "4K UHD"),
+        (r"(?<!\d)(?:1440p|2k|qhd)(?!\d)", "2K Quad HD"),
+        (r"(?<!\d)1080[pi]?(?!\d)|(?<![a-z])fhd(?![a-z])", "1080p FHD"),
+        (r"(?<!\d)720[pi]?(?!\d)", "720p HD"),
+        (r"(?<!\d)576[pi]?(?!\d)", "576P SD"),
+        (r"(?<!\d)480[pi]?(?!\d)", "480p SD"),
+        (r"(?<!\d)360[pi]?(?!\d)", "360P SD"),
+    )
+    for pattern, label in resolution_checks:
+        if has(pattern, resolution_sources):
+            resolution = label
+            break
+    if not resolution:
+        resolution = str(quality or parsed.get("resolution") or "HD").strip() or "HD"
 
-    stream_title_parts = [
-        f"📁 {filename}",
-        f"{size_emoji} {size}",
-    ]
-    if codec_info:
-        stream_title_parts.append(codec_info)
+    # Source. Check specific variants before generic BluRay/WEB matches.
+    source = ""
+    source_checks = (
+        (r"(?<![a-z0-9])(?:bd[ ._-]?remux|blu[ ._-]?ray[ ._-]?remux|bluray[ ._-]?remux|uhd[ ._-]?remux|remux)(?![a-z0-9])", "BluRay REMUX"),
+        (r"(?<![a-z0-9])(?:uhd[ ._-]?blu[ ._-]?ray|uhd[ ._-]?bluray|blu[ ._-]?ray|bluray|bdrip|brrip|bdmv|bd25|bd50)(?![a-z0-9])", "BluRay"),
+        (r"(?<![a-z0-9])(?:web[ ._-]?dl|webdl|web[ ._-]?mux)(?![a-z0-9])", "WEB-DL"),
+        (r"(?<![a-z0-9])(?:web[ ._-]?rip|webrip)(?![a-z0-9])", "WEBRip"),
+        (r"(?<![a-z0-9])(?:hdtv|pdtv|dsr)(?![a-z0-9])", "HDTV"),
+        (r"(?<![a-z0-9])(?:hd[ ._-]?dvd|hddvd)(?![a-z0-9])", "HD DVD"),
+        (r"(?<![a-z0-9])(?:dvd[ ._-]?rip|dvdrip|dvd)(?![a-z0-9])", "DVD"),
+        (r"(?<![a-z0-9])(?:hdcam|camrip|cam)(?![a-z0-9])", "CAM"),
+        (r"(?<![a-z0-9])(?:telesync|hdts)(?![a-z0-9])", "TS"),
+        (r"(?<![a-z0-9])(?:telecine|hdtc)(?![a-z0-9])", "TC"),
+    )
+    for pattern, label in source_checks:
+        if has(pattern):
+            source = label
+            break
+    if not source:
+        p_quality = str(parsed.get("quality") or "").strip()
+        # PTN's quality is useful only when it resembles a release source.
+        if p_quality and not re.fullmatch(r"\d{3,4}p|4k|uhd|fhd|hd", p_quality, re.I):
+            source = p_quality
 
-    stream_title = "\n".join(stream_title_parts)
-    return (stream_name, stream_title)
+    # Video codec aliases.
+    codec = ""
+    codec_checks = (
+        (r"(?<![a-z0-9])(?:av1|av01)(?![a-z0-9])", "AV1"),
+        (r"(?<![a-z0-9])(?:hevc|h[ ._-]?265|x265)(?![a-z0-9])", "HEVC"),
+        (r"(?<![a-z0-9])(?:avc|h[ ._-]?264|x264)(?![a-z0-9])", "AVC"),
+        (r"(?<![a-z0-9])(?:mpeg[ ._-]?2|mpeg2)(?![a-z0-9])", "MPEG-2"),
+        (r"(?<![a-z0-9])(?:vc[ ._-]?1|vc1)(?![a-z0-9])", "VC-1"),
+        (r"(?<![a-z0-9])vp9(?![a-z0-9])", "VP9"),
+    )
+    for pattern, label in codec_checks:
+        if has(pattern):
+            codec = label
+            break
+    if not codec and parsed.get("codec"):
+        p_codec = str(parsed.get("codec")).strip()
+        aliases = {"x265": "HEVC", "h265": "HEVC", "h.265": "HEVC", "x264": "AVC", "h264": "AVC", "h.264": "AVC"}
+        codec = aliases.get(p_codec.lower(), p_codec)
 
+    # Bit depth: accept 10bit, 10-bit, 10 bit, 10b, Hi10P, Main10 etc.
+    bit_depth = ""
+    bit_patterns = (
+        (r"(?<!\d)12[ ._-]?(?:bit|bits|b)(?![a-z0-9])|(?<![a-z0-9])main[ ._-]?12(?![a-z0-9])", "12-bit"),
+        (r"(?<!\d)10[ ._-]?(?:bit|bits|b)(?![a-z0-9])|(?<![a-z0-9])(?:hi10p|main[ ._-]?10)(?![a-z0-9])", "10-bit"),
+        (r"(?<!\d)8[ ._-]?(?:bit|bits|b)(?![a-z0-9])", "8-bit"),
+    )
+    for pattern, label in bit_patterns:
+        if has(pattern):
+            bit_depth = label
+            break
+    if not bit_depth and parsed.get("bitDepth"):
+        m = re.search(r"(8|10|12)", str(parsed.get("bitDepth")))
+        if m:
+            bit_depth = f"{m.group(1)}-bit"
+
+    # HDR / Dolby Vision. Multiple advertised formats are preserved.
+    hdr = []
+    if has(r"(?<![a-z0-9])(?:dolby[ ._-]?vision|dovi|dv)(?![a-z0-9])"):
+        hdr.append("Dolby Vision")
+    if has(r"(?<![a-z0-9])(?:hdr10\+|hdr10plus|hdr10[ ._-]?plus)(?![a-z0-9])"):
+        hdr.append("HDR10+")
+    hdr_without_plus = re.sub(r"hdr10(?:\+|plus|[ ._-]?plus)", "", raw, flags=re.I)
+    if re.search(r"(?<![a-z0-9])hdr10(?![a-z0-9])", hdr_without_plus, flags=re.I):
+        hdr.append("HDR10")
+    elif has(r"(?<![a-z0-9])hdr(?![a-z0-9])") and not any(x.startswith("HDR10") for x in hdr):
+        hdr.append("HDR")
+    if has(r"(?<![a-z0-9])hlg(?![a-z0-9])"):
+        hdr.append("HLG")
+
+    # Audio. Patterns allow codec + channel layouts with no separator (DDP5.1).
+    audio = ""
+    audio_checks = (
+        (r"(?<![a-z0-9])true[ ._-]?hd(?=\d|[^a-z0-9]|$)", "TrueHD"),
+        (r"(?<![a-z0-9])dts[ ._-]?(?:hd[ ._-]?)?(?:ma|master(?:[ ._-]?audio)?)(?=\d|[^a-z0-9]|$)", "DTS-HD MA"),
+        (r"(?<![a-z0-9])dts[ ._-]?hd[ ._-]?(?:hra|high[ ._-]?resolution)(?=\d|[^a-z0-9]|$)", "DTS-HD HRA"),
+        (r"(?<![a-z0-9])dts[ ._-]?hd(?=\d|[^a-z0-9]|$)", "DTS-HD"),
+        (r"(?<![a-z0-9])(?:e[ ._-]?ac[ ._-]?3|eac3|ddp|dd\+)(?=\d|[^a-z0-9]|$)", "DD+"),
+        (r"(?<![a-z0-9])(?:ac[ ._-]?3|ac3|dd)(?=\d|[^a-z0-9]|$)|(?<![a-z0-9])dolby[ ._-]?digital(?![a-z0-9])", "DD"),
+        (r"(?<![a-z0-9])dts(?=\d|[^a-z0-9]|$)", "DTS"),
+        (r"(?<![a-z0-9])flac(?=\d|[^a-z0-9]|$)", "FLAC"),
+        (r"(?<![a-z0-9])aac(?=\d|[^a-z0-9]|$)", "AAC"),
+        (r"(?<![a-z0-9])opus(?=\d|[^a-z0-9]|$)", "Opus"),
+        (r"(?<![a-z0-9])mp3(?=\d|[^a-z0-9]|$)", "MP3"),
+        (r"(?<![a-z0-9])(?:lpcm|pcm)(?=\d|[^a-z0-9]|$)", "LPCM"),
+    )
+    for pattern, label in audio_checks:
+        if has(pattern):
+            audio = label
+            break
+    if not audio and parsed.get("audio"):
+        p_audio = str(parsed.get("audio")).strip()
+        low = re.sub(r"[ ._-]+", "", p_audio.lower())
+        audio_aliases = {
+            "eac3": "DD+", "ddp": "DD+", "dd+": "DD+", "dolbydigitalplus": "DD+",
+            "ac3": "DD", "dd": "DD", "dolbydigital": "DD",
+            "truehd": "TrueHD", "dtshdma": "DTS-HD MA", "dtshd": "DTS-HD",
+        }
+        audio = audio_aliases.get(low, p_audio)
+
+    atmos = has(r"(?<![a-z0-9])(?:dolby[ ._-]?)?atmos(?![a-z0-9])")
+    dtsx = has(r"(?<![a-z0-9])dts[ ._-]?x(?![a-z0-9])")
+
+    # Channels: preserve dots by searching `raw`; also support 51/71 and CH forms.
+    channels = ""
+    channel_patterns = (
+        r"(?<!\d)(7\.1(?:\.4)?|5\.1(?:\.2|\.4)?|2\.1|2\.0|1\.0)(?:\s*ch(?:annels?)?)?(?!\d)",
+        r"(?<![a-z0-9])(?:ch(?:annels?)?[ ._-]?)?(71|51|20)(?!\d)",
+    )
+    cm = match(channel_patterns[0])
+    if cm:
+        channels = cm.group(1)
+    else:
+        cm = match(channel_patterns[1])
+        if cm:
+            channels = {"71": "7.1", "51": "5.1", "20": "2.0"}.get(cm.group(1), "")
+
+    video_parts = [x for x in (source, codec, bit_depth) if x]
+    lines = []
+    if video_parts:
+        lines.append(f"✦ {' · '.join(video_parts)}")
+    if hdr:
+        lines.append(f"⛶ {' · '.join(dict.fromkeys(hdr))}")
+
+    # Match the requested visual style: `Atmos · TrueHD 7.1` / `DD+ 5.1`.
+    audio_parts = []
+    if atmos:
+        audio_parts.append("Atmos")
+    if dtsx:
+        audio_parts.append("DTS:X")
+    if audio and audio not in audio_parts:
+        audio_parts.append(audio)
+    if audio_parts:
+        audio_text = " · ".join(audio_parts)
+        if channels:
+            audio_text += f" {channels}"
+        lines.append(f"♫ {audio_text}")
+    elif channels:
+        lines.append(f"♫ {channels}")
+
+    if size:
+        lines.append(f"⛁ {size}")
+
+    # A stream can legitimately have only a size when its stored filename has no
+    # technical release tags. Do not invent metadata or expose the full filename.
+    if not lines:
+        lines.append("⛁ Unknown size" if not size else f"⛁ {size}")
+
+    return (resolution, "\n".join(lines))
 
 def parse_size_to_bytes(size_str: str) -> int:
     if not size_str:
@@ -1099,15 +1260,7 @@ async def get_streams(
             key=lambda s: (get_resolution_priority(s.get("name", "")), s.get("size_bytes", 0)),
             reverse=not ascending
         )
-    name_count: dict = {}
-    for s in streams:
-        name_count[s["name"]] = name_count.get(s["name"], 0) + 1
-
-    seen: dict = {}
-    for s in streams:
-        if name_count[s["name"]] > 1:
-            seen[s["name"]] = seen.get(s["name"], 0) + 1
-            s["name"] = f"{s['name']} ({seen[s['name']]})"
+    # Keep identical quality labels clean; stream details in the title distinguish releases.
     return {"streams": streams}
 
 #----- Configure/install landing page rendered as HTML for a token
