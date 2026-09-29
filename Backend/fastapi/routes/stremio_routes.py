@@ -334,14 +334,20 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     resolution = ""
     resolution_sources = f"{raw} {parsed.get('resolution') or ''} {quality or ''}"
     resolution_checks = (
-        (r"(?<!\d)(?:4320p|8k)(?!\d)", "8K Ultra HD"),
-        (r"(?<!\d)(?:2160p|4k|uhd)(?!\d)", "4K UHD"),
-        (r"(?<!\d)(?:1440p|2k|qhd)(?!\d)", "2K Quad HD"),
+        # Prefer explicit vertical-resolution tokens before shorthand labels.
+        # Shorthand 4K/8K/2K must be standalone tokens so names such as RM4K
+        # are not misclassified as the actual stream resolution.
+        (r"(?<!\d)4320p(?!\d)", "8K Ultra HD"),
+        (r"(?<!\d)2160p(?!\d)", "4K UHD"),
+        (r"(?<!\d)1440p(?!\d)", "2K Quad HD"),
         (r"(?<!\d)1080[pi]?(?!\d)|(?<![a-z])fhd(?![a-z])", "1080p FHD"),
         (r"(?<!\d)720[pi]?(?!\d)", "720p HD"),
         (r"(?<!\d)576[pi]?(?!\d)", "576P SD"),
         (r"(?<!\d)480[pi]?(?!\d)", "480p SD"),
         (r"(?<!\d)360[pi]?(?!\d)", "360P SD"),
+        (r"(?<![a-z0-9])8k(?![a-z0-9])", "8K Ultra HD"),
+        (r"(?<![a-z0-9])(?:4k|uhd)(?![a-z0-9])", "4K UHD"),
+        (r"(?<![a-z0-9])(?:2k|qhd)(?![a-z0-9])", "2K Quad HD"),
     )
     for pattern, label in resolution_checks:
         if has(pattern, resolution_sources):
