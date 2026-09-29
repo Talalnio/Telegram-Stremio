@@ -501,7 +501,7 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     if not lines:
         lines.append("⛁ Unknown size" if not size else f"⛁ {size}")
 
-    return (resolution, "\n\n".join(lines))
+    return (resolution, "\n".join(lines))
 
 def parse_size_to_bytes(size_str: str) -> int:
     if not size_str:
