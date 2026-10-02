@@ -30,7 +30,7 @@ router = APIRouter(prefix="/stremio", tags=["Stremio Addon"])
 templates = Jinja2Templates(directory="Backend/fastapi/templates")
 
 #----- Addon configuration
-ADDON_NAME = "TG"
+ADDON_NAME = "T7Cine+"
 ADDON_VERSION = __version__
 PAGE_SIZE = 15
 
