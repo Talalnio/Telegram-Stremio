@@ -677,7 +677,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         "id": f"telegram.media.{token[:8]}",
         "version": addon_version,
         "name": addon_name,
-        "logo": "https://i.ibb.co/RkrhcsRH/Oct-2-2026-10-47-07-PM-upscaled.png",
+        "logo": "https://i.ibb.co/QvQff6hR/remove-Image-Oct-2-2026-11-21-59-PM-upscaled.png",
         "description": addon_desc,
         "types": ["movie", "series"],
         "resources": resources,
