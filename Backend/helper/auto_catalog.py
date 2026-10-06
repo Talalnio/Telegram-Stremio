@@ -1,3 +1,4 @@
+from Backend.helper.catalog_labels import catalog_display_name
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
@@ -169,6 +170,7 @@ async def get_auto_catalog_settings(db) -> dict:
         definitions.append({
             **item,
             "enabled": item["key"] in enabled_set,
+            "display_name": catalog_display_name({"auto": True, "auto_key": _catalog_key(item["name"]), "name": item["name"]}),
         })
 
     return {

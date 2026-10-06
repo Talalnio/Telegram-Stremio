@@ -805,7 +805,7 @@ function renderCatalogs() {
       <button class="text-left w-full min-w-0" onclick="selectCatalog('${c._id}')">
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-xl">${c.auto ? '✨' : meta.icon}</span>
-          <h3 class="font-black truncate">${escapeHtml(c.name)}</h3>
+          <h3 class="font-black truncate">${escapeHtml(c.display_name || c.name)}</h3>
           ${c.auto ? '<span class="pill text-[0.62rem] px-2 py-0.5">Auto</span>' : ''}
         </div>
         <div class="flex items-center gap-2 mt-2 flex-wrap">
@@ -860,7 +860,7 @@ function updateSelectedHeader() {
   visibilityPill.className = `pill vis-chip ${meta.chip}`;
   visibilityPill.textContent = `${meta.icon} ${visibilityLabel(mode)}`;
   countPill.textContent = `${(catalog.items || []).length} title${(catalog.items || []).length === 1 ? '' : 's'}`;
-  document.getElementById('selected-title').textContent = catalog.name || 'Selected Catalog';
+  document.getElementById('selected-title').textContent = catalog.display_name || catalog.name || 'Selected Catalog';
   document.getElementById('selected-subtitle').textContent = 'Manage titles and choose who can see this catalog in Stremio.';
 
   const sel = document.getElementById('ws-visibility');
@@ -1025,7 +1025,7 @@ async function loadAutoCatalogSettings() {
             <button type="button" class="auto-chip ${item.enabled ? 'on' : ''}"
                     data-key="${escapeHtml(item.key)}" aria-pressed="${item.enabled}"
                     onclick="toggleAutoCatalog(this)">
-              <span class="dot"></span>${escapeHtml(item.name)}
+              <span class="dot"></span>${escapeHtml(item.display_name || item.name)}
             </button>`).join('')}
         </div>
       </div>

@@ -1,3 +1,4 @@
+from Backend.helper.catalog_labels import DEFAULT_CATALOG_LABELS, catalog_display_name
 import asyncio
 import re
 import time
@@ -553,7 +554,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             {
                 "type": "movie",
                 "id": "latest_movies",
-                "name": "Latest",
+                "name": DEFAULT_CATALOG_LABELS["latest_movies"],
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
@@ -563,7 +564,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             {
                 "type": "movie",
                 "id": "top_movies",
-                "name": "Popular",
+                "name": DEFAULT_CATALOG_LABELS["top_movies"],
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
@@ -574,7 +575,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             {
                 "type": "series",
                 "id": "latest_series",
-                "name": "Latest",
+                "name": DEFAULT_CATALOG_LABELS["latest_series"],
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
@@ -584,7 +585,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             {
                 "type": "series",
                 "id": "top_series",
-                "name": "Popular",
+                "name": DEFAULT_CATALOG_LABELS["top_series"],
                 "extra": [
                     {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
@@ -606,7 +607,7 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
                 if not has_movie and not has_series:
                     continue
                 catalog_id = str(catalog.get("_id"))
-                catalog_name = catalog.get("name") or "Custom Catalog"
+                catalog_name = catalog_display_name(catalog)
                 if has_movie:
                     catalogs.append({
                         "type": "movie",
@@ -1351,17 +1352,17 @@ async def configure_addon(token: str, request: Request):
 #----- Catalogs this token can see, in effective (token or global) order
 async def _addon_catalogs_for_token(token_data: dict) -> list:
     entries = [
-        {"id": "latest_movies", "name": "Latest Movies", "type": "movie"},
-        {"id": "top_movies", "name": "Popular Movies", "type": "movie"},
-        {"id": "latest_series", "name": "Latest Series", "type": "series"},
-        {"id": "top_series", "name": "Popular Series", "type": "series"},
+        {"id": "latest_movies", "name": DEFAULT_CATALOG_LABELS["latest_movies"], "type": "movie"},
+        {"id": "top_movies", "name": DEFAULT_CATALOG_LABELS["top_movies"], "type": "movie"},
+        {"id": "latest_series", "name": DEFAULT_CATALOG_LABELS["latest_series"], "type": "series"},
+        {"id": "top_series", "name": DEFAULT_CATALOG_LABELS["top_series"], "type": "series"},
     ]
     try:
         for c in await db.get_custom_catalogs():
             items = [i for i in (c.get("items") or []) if _token_can_view(*_effective_visibility(c, i), token_data)]
             if not items:
                 continue
-            cid, name = f"custom_{c['_id']}", (c.get("name") or "Catalog")
+            cid, name = f"custom_{c['_id']}", catalog_display_name(c)
             if any(i.get("media_type") == "movie" for i in items):
                 entries.append({"id": cid, "name": name, "type": "movie"})
             if any(i.get("media_type") == "tv" for i in items):

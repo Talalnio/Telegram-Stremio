@@ -1,3 +1,4 @@
+from Backend.helper.catalog_labels import DEFAULT_CATALOG_LABELS, catalog_display_name
 import asyncio
 import asyncio
 import json
@@ -1400,7 +1401,7 @@ async def list_custom_catalogs_api(
                     and item.get("media_type") == normalized_type
                     for item in catalog.get("items", []) or []
                 )
-        return {"catalogs": catalogs}
+        return {"catalogs": [{**c, "display_name": catalog_display_name(c)} for c in catalogs]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1625,10 +1626,10 @@ async def update_auto_catalog_settings_api(payload: dict):
 
 
 _DEFAULT_CATALOG_ENTRIES = [
-    {"id": "latest_movies", "name": "Latest Movies", "group": "Default Movies", "type": "movie"},
-    {"id": "top_movies", "name": "Popular Movies", "group": "Default Movies", "type": "movie"},
-    {"id": "latest_series", "name": "Latest Series", "group": "Default TV", "type": "series"},
-    {"id": "top_series", "name": "Popular Series", "group": "Default TV", "type": "series"},
+    {"id": "latest_movies", "name": DEFAULT_CATALOG_LABELS["latest_movies"], "group": "Default Movies", "type": "movie"},
+    {"id": "top_movies", "name": DEFAULT_CATALOG_LABELS["top_movies"], "group": "Default Movies", "type": "movie"},
+    {"id": "latest_series", "name": DEFAULT_CATALOG_LABELS["latest_series"], "group": "Default TV", "type": "series"},
+    {"id": "top_series", "name": DEFAULT_CATALOG_LABELS["top_series"], "group": "Default TV", "type": "series"},
 ]
 
 
@@ -1639,7 +1640,7 @@ async def get_catalog_order_api():
         for c in catalogs:
             items = c.get("items") or []
             cid = f"custom_{c['_id']}"
-            name = c.get("name") or "Catalog"
+            name = catalog_display_name(c)
             group = "Auto" if c.get("auto") else "Custom"
             has_movie = any(i.get("media_type") == "movie" for i in items)
             has_series = any(i.get("media_type") == "tv" for i in items)
