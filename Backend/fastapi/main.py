@@ -1,3 +1,4 @@
+from Backend.fastapi.routes.security_routes import router as security_router
 import asyncio
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
@@ -129,6 +130,7 @@ from Backend.fastapi.routes.template_routes import (
     edit_media_page,
     login_page,
     login_post,
+    login_factor_post,
     logout,
     media_management_page,
     settings_page,
@@ -180,8 +182,8 @@ async def login_get(request: Request):
     return await login_page(request)
 
 @app.post("/login", response_class=HTMLResponse)
-async def login_post_route(request: Request, username: str = Form(...), password: str = Form(...)):
-    return await login_post(request, username, password)
+async def login_post_route(request: Request, username: str = Form(...), password: str = Form(...), csrf: str = Form(...)):
+    return await login_post(request, username, password, csrf)
 
 @app.get("/logout")
 async def logout_route(request: Request):
@@ -861,3 +863,10 @@ async def auth_exception_handler(request: Request, exc):
             headers.update(exc.headers)
         return JSONResponse(status_code=401, content={"detail": detail}, headers=headers)
     return RedirectResponse(url="/login", status_code=302)
+
+
+@app.post("/login/2fa", response_class=HTMLResponse)
+async def login_factor_route(request: Request, code: str = Form(...), csrf: str = Form(...)):
+    return await login_factor_post(request, code, csrf)
+
+app.include_router(security_router)

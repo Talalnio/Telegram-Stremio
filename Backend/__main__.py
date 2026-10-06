@@ -34,7 +34,11 @@ async def start_services():
         await asyncio.sleep(1.2)
 
         await SettingsManager.initialize(db)
-        app.add_middleware(SessionMiddleware, secret_key=SettingsManager.current().session_secret or secrets.token_hex(32))
+        app.add_middleware(
+            SessionMiddleware, secret_key=SettingsManager.current().session_secret or secrets.token_hex(32),
+            max_age=12 * 60 * 60, same_site="lax",
+            https_only=SettingsManager.current().base_url.startswith("https://"),
+        )
         await asyncio.sleep(0.5)
 
         await scan_manager.load(db)

@@ -1761,6 +1761,13 @@ async def get_settings_api() -> dict:
 
 async def update_settings_api(payload: dict) -> dict:
 
+    # TOTP secrets are encrypted with the stable session secret.
+    proposed_secret = str(payload.get("session_secret") or "").strip()
+    if proposed_secret and str(payload["session_secret"]) != SettingsManager.current().session_secret:
+        from Backend.fastapi.security.two_factor import admin_security
+        if (await admin_security.state())["enabled"]:
+            raise HTTPException(400, "عطّل المصادقة الثنائية قبل تغيير مفتاح الجلسات، ثم أعد تفعيلها.")
+
     #----- Empty password string means leave it unchanged
     if "admin_password" in payload and not str(payload["admin_password"]).strip():
         del payload["admin_password"]

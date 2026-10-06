@@ -30,7 +30,18 @@
             </div>
             {% endif %}
 
-            <form method="post" class="space-y-4">
+            <form method="post" action="{{ '/login/2fa' if two_factor else '/login' }}" class="space-y-4">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                {% if two_factor %}
+                <div dir="rtl" class="space-y-3">
+                    <label for="auth-code" class="text-sm font-bold">رمز المصادقة الثنائية</label>
+                    <p class="text-text-secondary text-xs">أدخل رمز تطبيق المصادقة، أو أحد رموز الاسترداد الاحتياطية.</p>
+                    <input id="auth-code" name="code" type="text" dir="ltr" required maxlength="32"
+                        autocomplete="one-time-code" autofocus
+                        class="w-full px-4 py-3 bg-background/50 rounded-2xl border border-hairline text-text text-sm"
+                        placeholder="123456">
+                </div>
+                {% else %}
 
                 <div class="space-y-1.5">
                     <label class="text-[10px] font-bold uppercase tracking-widest text-text-secondary ml-1">Username</label>
@@ -58,13 +69,15 @@
                     </div>
                 </div>
 
+                {% endif %}
                 <button type="submit"
                     class="w-full py-3.5 rounded-2xl bg-primary hover:brightness-110 text-background font-bold transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-3 mt-4">
                     <i class="fa-solid fa-right-to-bracket text-sm"></i>
-                    Sign In
+                    {{ "تحقق وسجّل الدخول" if two_factor else "Sign In" }}
                 </button>
 
             </form>
+            {% if two_factor %}<a href="/logout" class="block text-center text-xs mt-4">العودة إلى تسجيل الدخول</a>{% endif %}
 
         </div>
     </div>

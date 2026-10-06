@@ -1,0 +1,118 @@
+<section class="settings-card" dir="rtl" aria-labelledby="mfa-heading">
+    <h2 id="mfa-heading"><i class="fa-solid fa-shield-halved"></i> المصادقة الثنائية</h2>
+    <p class="hint">احمِ دخول لوحة الإدارة برمز من تطبيق المصادقة، إضافة إلى كلمة المرور.</p>
+    <p id="mfa-state" class="hint" role="status" aria-live="polite">جارٍ تحميل حالة الحماية…</p>
+    <div id="mfa-controls" hidden>
+        <label class="s-label" for="mfa-password">كلمة المرور الحالية</label>
+        <input id="mfa-password" class="s-input" type="password" autocomplete="current-password" maxlength="512">
+        <div id="mfa-disabled" hidden>
+            <button type="button" class="add-btn mt-3" onclick="mfaAction('setup')">بدء تفعيل المصادقة الثنائية</button>
+        </div>
+        <div id="mfa-setup" hidden>
+            <p class="hint mt-3">امسح الرمز بتطبيق المصادقة، أو أدخل مفتاح الإعداد يدوياً. ينتهي الإعداد بعد عشر دقائق.</p>
+            <img id="mfa-qr" alt="رمز إعداد المصادقة الثنائية" width="220" height="220" style="background:white;max-width:100%;margin:1rem 0">
+            <code id="mfa-secret" dir="ltr" style="display:block;overflow-wrap:anywhere"></code>
+        </div>
+        <div id="mfa-code-wrap" hidden>
+            <label class="s-label mt-3" for="mfa-code">رمز المصادقة</label>
+            <input id="mfa-code" class="s-input" type="text" dir="ltr" autocomplete="one-time-code" maxlength="32" placeholder="123456">
+            <p class="hint" id="mfa-code-hint"></p>
+            <button id="mfa-enable" type="button" class="add-btn mt-3" onclick="mfaAction('enable')" hidden>تأكيد التفعيل</button>
+            <button id="mfa-disable" type="button" class="add-btn mt-3" onclick="mfaAction('disable')" hidden>تعطيل المصادقة الثنائية</button>
+            <button id="mfa-cancel" type="button" class="add-btn mt-3" onclick="mfaAction('cancel')" hidden>إلغاء الإعداد</button>
+        </div>
+    </div>
+    <div id="mfa-recovery" hidden>
+        <p class="hint mt-3">تم التفعيل. احفظ رموز الاسترداد في مكان آمن. كل رمز يُستخدم مرة واحدة مع كلمة المرور، ولن تظهر هذه الرموز مجدداً.</p>
+        <pre id="mfa-recovery-codes" dir="ltr" style="white-space:pre-wrap;overflow-wrap:anywhere;margin:1rem 0"></pre>
+        <button type="button" class="add-btn" onclick="downloadRecoveryCodes()">تنزيل رموز الاسترداد</button>
+        <button type="button" class="add-btn" onclick="finishRecovery()">حفظت الرموز، إنهاء</button>
+    </div>
+    <p id="mfa-message" class="hint mt-3" role="status" aria-live="polite"></p>
+</section>
+<script>
+let mfaCsrf = '', mfaQrUrl = '', mfaBusy = false;
+function mfaShow(id, visible) { document.getElementById(id).hidden = !visible; }
+function clearMfaSetup() {
+    document.getElementById('mfa-secret').textContent = '';
+    document.getElementById('mfa-qr').removeAttribute('src');
+    if (mfaQrUrl) URL.revokeObjectURL(mfaQrUrl);
+    mfaQrUrl = '';
+    document.getElementById('mfa-code').value = '';
+    mfaShow('mfa-setup', false);
+}
+async function loadMfa() {
+    mfaShow('mfa-controls', false);
+    try {
+        const response = await fetch('/api/admin/security/2fa', {cache:'no-store'});
+        if (!response.ok) throw new Error('تعذّر تحميل حالة الحماية. حدّث الصفحة.');
+        const data = await response.json();
+        mfaCsrf = data.csrf;
+        document.getElementById('mfa-state').textContent = data.enabled
+            ? `المصادقة الثنائية مفعّلة · رموز الاسترداد المتبقية: ${data.remaining_codes}`
+            : 'المصادقة الثنائية غير مفعّلة.';
+        mfaShow('mfa-disabled', !data.enabled);
+        mfaShow('mfa-code-wrap', data.enabled);
+        mfaShow('mfa-disable', data.enabled);
+        mfaShow('mfa-enable', false);
+        mfaShow('mfa-cancel', false);
+        document.getElementById('mfa-code-hint').textContent = 'للتعطيل، أدخل رمز التطبيق أو رمز استرداد. إذا استُخدم رمز التطبيق للتو، انتظر الرمز التالي.';
+        mfaShow('mfa-controls', true);
+    } catch (error) { document.getElementById('mfa-message').textContent = error.message; }
+}
+async function mfaAction(action) {
+    if (mfaBusy) return;
+    const message = document.getElementById('mfa-message');
+    const password = document.getElementById('mfa-password').value;
+    if (!password) { message.textContent = 'أدخل كلمة المرور الحالية.'; return; }
+    if (action === 'disable' && !confirm('هل تريد تعطيل المصادقة الثنائية؟ ستنتهي الجلسات الأخرى.')) return;
+    mfaBusy = true;
+    document.querySelectorAll('#mfa-controls button').forEach(b => b.disabled = true);
+    message.textContent = 'جارٍ تنفيذ الطلب…';
+    try {
+        const response = await fetch('/api/admin/security/2fa/' + action, {
+            method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':mfaCsrf},
+            body:JSON.stringify({password, code:document.getElementById('mfa-code').value.trim()})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'تعذّر تنفيذ الطلب. حاول مرة أخرى.');
+        mfaCsrf = data.csrf;
+        if (action === 'setup') {
+            clearMfaSetup();
+            mfaQrUrl = URL.createObjectURL(new Blob([data.qr_svg], {type:'image/svg+xml'}));
+            document.getElementById('mfa-qr').src = mfaQrUrl;
+            document.getElementById('mfa-secret').textContent = data.secret;
+            document.getElementById('mfa-code-hint').textContent = 'أدخل رمزاً من تطبيق المصادقة لتأكيد الإعداد.';
+            mfaShow('mfa-disabled', false); mfaShow('mfa-setup', true); mfaShow('mfa-code-wrap', true);
+            mfaShow('mfa-enable', true); mfaShow('mfa-cancel', true);
+            message.textContent = 'لم تتفعّل الحماية بعد. أكمل التحقق أدناه.';
+        } else {
+            clearMfaSetup();
+            document.getElementById('mfa-password').value = '';
+            await loadMfa();
+            message.textContent = action === 'enable' ? 'تم تفعيل المصادقة الثنائية وإنهاء الجلسات الأخرى.'
+                : action === 'disable' ? 'تم تعطيل المصادقة الثنائية وإنهاء الجلسات الأخرى.' : 'تم إلغاء الإعداد.';
+            if (data.recovery_codes) {
+                document.getElementById('mfa-recovery-codes').textContent = data.recovery_codes.join('\n');
+                mfaShow('mfa-recovery', true); mfaShow('mfa-controls', false);
+            }
+        }
+    } catch (error) { message.textContent = error.message; }
+    finally {
+        mfaBusy = false;
+        document.querySelectorAll('#mfa-controls button').forEach(b => b.disabled = false);
+    }
+}
+function downloadRecoveryCodes() {
+    const text = document.getElementById('mfa-recovery-codes').textContent;
+    if (!text) return;
+    const url = URL.createObjectURL(new Blob(['T7cine+ recovery codes\n' + text], {type:'text/plain;charset=utf-8'}));
+    const link = document.createElement('a'); link.href = url; link.download = 'T7cine-recovery-codes.txt'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function finishRecovery() {
+    document.getElementById('mfa-recovery-codes').textContent = '';
+    mfaShow('mfa-recovery', false); loadMfa();
+}
+loadMfa();
+</script>

@@ -889,3 +889,28 @@ Your server is a standard **Stremio-style addon**, so it works in any compatible
 |:---:|:---:|:---:|:---:|
 |[`Karan`](https://github.com/Weebzone)|[`Stremio`](https://github.com/Stremio)|[`ChatGPT`](https://github.com/OPENAI)|[`VFlix Prime`](https://t.me/vflixprime2)|
 |Author|Stremio SDK|Refactor|Community Support|
+
+
+### Admin two-factor authentication (v5.0.6)
+
+The Settings page includes an Arabic two-factor authentication section for the single
+configured admin account. Enter the current password, scan the locally generated QR
+code in an authenticator app, then enter its six-digit code to enable protection.
+Download the ten recovery codes immediately; they are displayed once and each can
+be used once, together with the admin password. Disabling 2FA requires the current
+password and an authenticator or recovery code.
+
+Enabling or disabling 2FA invalidates other admin sessions. Upgrading also requires
+existing admins to log in again. Sessions expire after 12 hours; password-verified
+2FA challenges expire after five minutes. MongoDB stores session hashes, rate-limit
+counters, encrypted TOTP secrets and hashed recovery codes in dedicated tracking
+collections. These security collections are intentionally outside configuration
+exports. Keep the tracking database and its session secret intact; disable 2FA
+before rotating the session secret and enroll again afterwards. Configure the
+correct HTTPS base URL so secure cookies and same-origin admin requests work.
+
+Install updated dependencies before restarting (`uv sync --locked`, or
+`pip install -r requirements.txt` for pip installations). 2FA is disabled until the
+admin completes enrollment. Run isolated regression tests with
+`uv run --group dev python -m unittest discover -s tests -v`; the tests use a mock
+database and never connect to Telegram or the live database.

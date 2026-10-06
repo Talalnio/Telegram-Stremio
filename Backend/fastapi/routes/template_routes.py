@@ -1,3 +1,4 @@
+from Backend.fastapi.security.two_factor import admin_security, csrf_token, check_csrf
 import time
 
 from fastapi import Depends, Form, HTTPException, Request
@@ -43,24 +44,56 @@ async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)
 
 #----- Login form (redirects to home when already authenticated)
 async def login_page(request: Request):
-    if is_authenticated(request):
-        return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse("login.html", _base_context(request))
-
-
-#----- Handle login submission
-async def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
-    if verify_credentials(username, password):
-        request.session["authenticated"] = True
-        request.session["username"] = username
+    if await admin_security.authenticated(request):
         return RedirectResponse(url="/", status_code=302)
     ctx = _base_context(request)
-    ctx["error"] = "Invalid credentials"
-    return templates.TemplateResponse("login.html", ctx)
+    ctx["csrf_token"] = csrf_token(request)
+    ctx["two_factor"] = bool(request.session.get("admin_challenge"))
+    response = templates.TemplateResponse("login.html", ctx)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def login_post(request: Request, username: str, password: str, csrf: str):
+    check_csrf(request, csrf)
+    try:
+        await admin_security.throttle(request, "password")
+    except HTTPException as error:
+        if error.status_code != 429:
+            raise
+        ctx = _base_context(request)
+        ctx.update(error=error.detail, csrf_token=csrf_token(request))
+        response = templates.TemplateResponse("login.html", ctx, status_code=429)
+        response.headers.update({"Cache-Control": "no-store", "Retry-After": "300"})
+        return response
+    if verify_credentials(username, password):
+        await admin_security.start_login(request)
+        return RedirectResponse(url="/login" if request.session.get("admin_challenge") else "/", status_code=303)
+    ctx = _base_context(request)
+    ctx.update(error="اسم المستخدم أو كلمة المرور غير صحيحة.", csrf_token=csrf_token(request))
+    response = templates.TemplateResponse("login.html", ctx, status_code=400)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def login_factor_post(request: Request, code: str, csrf: str):
+    check_csrf(request, csrf)
+    try:
+        await admin_security.finish_login(request, code)
+    except HTTPException as error:
+        if error.status_code not in (400, 401, 429):
+            raise
+        ctx = _base_context(request)
+        ctx.update(error=error.detail, csrf_token=csrf_token(request), two_factor=bool(request.session.get("admin_challenge")))
+        response = templates.TemplateResponse("login.html", ctx, status_code=error.status_code)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    return RedirectResponse(url="/", status_code=303)
 
 
 #----- Clear the session and return to login
 async def logout(request: Request):
+    await admin_security.revoke(request)
     request.session.clear()
     return RedirectResponse(url="/login", status_code=302)
 
