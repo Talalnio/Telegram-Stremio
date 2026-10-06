@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<html lang="en" class="{{ 'dark' if theme.is_dark else 'light' }}">
+<html lang="ar" dir="rtl" class="{{ 'dark' if theme.is_dark else 'light' }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Install T7cine+ Addon</title>
+<title>تثبيت إضافة T7cine+</title>
 
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='{{ theme.colors.primary | replace('#','%23') }}'/%3E%3Cpath d='M12.5 9.5l10 6.5-10 6.5z' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
 <style>
 :root {
@@ -33,7 +33,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family: 'Noto Sans Arabic', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     background-color: var(--bg);
     color: var(--text);
@@ -120,17 +120,17 @@ h1 { font-size: 1.15rem; font-weight: 700; color: var(--text); margin-bottom: 6p
 .steps {
     background: var(--surface); border: 1px solid var(--hairline);
     border-radius: 0.85rem; padding: 14px 18px; margin: 16px 0;
-    text-align: left; font-size: 0.85rem; color: var(--text-sec);
+    text-align: start; font-size: 0.85rem; color: var(--text-sec);
 }
 .steps b { color: var(--text); }
-.steps ol { margin-top: 8px; margin-left: 18px; line-height: 1.9; }
+.steps ol { margin-top: 8px; margin-inline-start: 18px; line-height: 1.9; }
 
 .url-box {
     background: color-mix(in srgb, var(--bg) 70%, var(--card));
     border: 1px solid var(--hairline); border-radius: 0.7rem;
     padding: 10px 14px; font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 0.72rem; color: var(--text-sec);
-    word-break: break-all; text-align: left; margin-top: 16px;
+    word-break: break-all; direction: ltr; text-align: left; margin-top: 16px;
 }
 
 .btn-copy {
@@ -139,6 +139,7 @@ h1 { font-size: 1.15rem; font-weight: 700; color: var(--text); margin-bottom: 6p
     border-radius: 0.7rem; cursor: pointer; font-size: 0.85rem; font-weight: 600;
     transition: background .2s ease, color .2s ease, border-color .2s ease;
 }
+button { font-family: inherit; }
 .btn-copy:hover { background: var(--surface-2); color: var(--text); border-color: var(--hairline-strong); }
 </style>
 </head>
@@ -148,77 +149,77 @@ h1 { font-size: 1.15rem; font-weight: 700; color: var(--text); margin-bottom: 6p
 <div class="card">
     <div class="brand">
         <div class="brand-logo"><i class="fa-solid fa-play"></i></div>
-        <span class="brand-name">T7cine+</span>
+        <span class="brand-name" dir="ltr">T7cine+</span>
     </div>
 
-    <h1>Install / Update Addon</h1>
-    <p class="sub-title">Install or update your T7cine+ addon for Stremio.</p>
+    <h1>تثبيت الإضافة أو تحديثها</h1>
+    <p class="sub-title">ثبّت إضافة T7cine+ في Stremio أو حدّثها.</p>
 
     <div class="info-row">
-        <span class="info-label">User</span>
-        <span class="info-val">{{ user_name }}</span>
+        <span class="info-label">المستخدم</span>
+        <span class="info-val"><bdi>{{ "غير معروف" if user_name == "Unknown" else user_name }}</bdi></span>
     </div>
     <div class="info-row">
-        <span class="info-label">Status</span>
-        <span class="status-badge">{{ status_text }}</span>
+        <span class="info-label">الحالة</span>
+        <span class="status-badge">{{ {"Active": "نشط", "Expired": "منتهي الصلاحية", "Admin": "المشرف", "Invalid": "غير صالح", "Unknown": "غير معروف"}.get(status_text, status_text) }}</span>
     </div>
     <div class="info-row">
-        <span class="info-label">Expires</span>
-        <span class="info-val">{{ expiry_str }}</span>
+        <span class="info-label">تاريخ الانتهاء</span>
+        <span class="info-val"><bdi>{{ {"Never": "بلا تاريخ انتهاء", "N/A": "غير متاح"}.get(expiry_str, expiry_str) }}</bdi></span>
     </div>
 
     <a href="{{ web_install_url }}" class="btn-install" target="_blank">
-        <i class="fa-solid fa-bolt"></i> Install / Update in Stremio
+        <i class="fa-solid fa-bolt"></i> تثبيت الإضافة أو تحديثها في Stremio
     </a>
 
     <div class="steps">
-        <b>Prefer to do it manually?</b>
+        <b>خطوات التثبيت اليدوي</b>
         <ol>
-            <li>Open Stremio and go to the <b>Add-ons</b> tab</li>
-            <li>Click the <b>Search / URL</b> field</li>
-            <li>Paste the URL below and press Enter</li>
+            <li>افتح Stremio وانتقل إلى تبويب <b>الإضافات</b>.</li>
+            <li>اضغط على حقل <b>البحث أو الرابط</b>.</li>
+            <li>الصق الرابط أدناه، ثم اضغط على مفتاح Enter.</li>
         </ol>
     </div>
 
     <div class="url-box" id="murl">{{ manifest_url }}</div>
-    <button onclick="copyUrl()" class="btn-copy"><i class="fa-solid fa-copy"></i> Copy URL</button>
+    <button onclick="copyUrl()" class="btn-copy"><i class="fa-solid fa-copy"></i> نسخ الرابط</button>
 </div>
 
-<div class="card" style="text-align:left">
-    <h1 style="text-align:center"><i class="fa-solid fa-sliders"></i> Personalize</h1>
-    <p class="sub-title" style="text-align:center">Tune quality and catalogs for your install. Re-install after saving.</p>
+<div class="card" style="text-align:start">
+    <h1 style="text-align:center"><i class="fa-solid fa-sliders"></i> تخصيص الإضافة</h1>
+    <p class="sub-title" style="text-align:center">خصّص جودة الفيديو والكاتلوجات، ثم أعد تثبيت الإضافة بعد حفظ التفضيلات.</p>
 
     <div class="cfg-block">
-        <div class="cfg-title">Stream quality order</div>
+        <div class="cfg-title">ترتيب جودة الفيديو</div>
         <div class="seg" id="cfg-sort">
-            <button type="button" data-val="desc" class="seg-btn active" onclick="setSort('desc')">Highest first</button>
-            <button type="button" data-val="asc" class="seg-btn" onclick="setSort('asc')">Lowest first</button>
+            <button type="button" data-val="desc" class="seg-btn active" onclick="setSort('desc')">الأعلى جودة أولاً</button>
+            <button type="button" data-val="asc" class="seg-btn" onclick="setSort('asc')">الأقل جودة أولاً</button>
         </div>
     </div>
 
     <div class="cfg-block">
-        <div class="cfg-title">Show only these qualities</div>
+        <div class="cfg-title">الجودات التي تريد عرضها</div>
         <div class="chips" id="cfg-quality"></div>
-        <p class="cfg-hint">Leave all off to show every quality.</p>
+        <p class="cfg-hint">لعرض جميع الجودات، اترك الخيارات دون تحديد.</p>
     </div>
 
     <div class="cfg-block">
-        <div class="cfg-title">Catalogs</div>
+        <div class="cfg-title">الكاتلوجات</div>
         <div id="cfg-catalogs" class="cfg-catalogs"></div>
-        <p class="cfg-hint">Toggle to hide a catalog; use arrows to reorder.</p>
+        <p class="cfg-hint">اضغط على رمز العين لإظهار الكاتلوج أو إخفائه، واستخدم الأسهم لتغيير ترتيبه.</p>
     </div>
 
     <button onclick="saveConfig()" class="btn-install" id="cfg-save" style="margin-top:8px">
-        <i class="fa-solid fa-floppy-disk"></i> Save preferences
+        <i class="fa-solid fa-floppy-disk"></i> حفظ التفضيلات
     </button>
-    <p id="cfg-state" class="cfg-hint" style="text-align:center"></p>
+    <p role="status" aria-live="polite" id="cfg-state" class="cfg-hint" style="text-align:center"></p>
 </div>
 </div>
 </div>
 
 <style>
 .cfg-block { margin: 14px 0; }
-.cfg-title { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--text-sec); margin-bottom: 8px; }
+.cfg-title { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: normal; color: var(--text-sec); margin-bottom: 8px; }
 .cfg-hint { font-size: .72rem; color: var(--text-sec); margin-top: 6px; }
 .seg { display: flex; gap: 6px; background: var(--surface); border: 1px solid var(--hairline); border-radius: .8rem; padding: 4px; }
 .seg-btn { flex: 1; padding: 9px; border-radius: .6rem; border: none; background: transparent; color: var(--text-sec); font-weight: 700; font-size: .82rem; cursor: pointer; }
@@ -246,7 +247,7 @@ function setSort(v) {
 
 function renderQuality() {
     document.getElementById('cfg-quality').innerHTML = QUALITIES.map(q =>
-        `<button type="button" class="qchip ${cfg.quality_filter.includes(q) ? 'on' : ''}" onclick="toggleQuality('${q}')">${q}</button>`
+        `<button type="button" dir="ltr" class="qchip ${cfg.quality_filter.includes(q) ? 'on' : ''}" onclick="toggleQuality('${q}')">${q}</button>`
     ).join('');
 }
 
@@ -262,14 +263,14 @@ function renderCatalogs() {
     document.getElementById('cfg-catalogs').innerHTML = cfgCatalogs.map((c, i) => {
         const key = catKey(c);
         const hidden = cfg.hidden_catalogs.includes(key) || cfg.hidden_catalogs.includes(c.id);
-        const tag = c.type === 'series' ? '📺 TV' : '🎬 Movie';
+        const tag = c.type === 'series' ? '📺 مسلسلات' : '🎬 أفلام';
         return `<div class="cfg-cat ${hidden ? 'hidden-cat' : ''}">
-            <button class="cfg-eye" title="Show/hide" onclick="toggleHide(${i})"><i class="fa-solid fa-eye${hidden ? '-slash' : ''}"></i></button>
+            <button class="cfg-eye" title="${hidden ? 'إظهار الكاتلوج' : 'إخفاء الكاتلوج'}" aria-label="${hidden ? 'إظهار الكاتلوج' : 'إخفاء الكاتلوج'}" onclick="toggleHide(${i})"><i class="fa-solid fa-eye${hidden ? '-slash' : ''}"></i></button>
             <span class="nm">${escapeCfg(c.name)} <small style="opacity:.6">· ${tag}</small></span>
-            <button class="cfg-arr" ${i === 0 ? 'disabled' : ''} onclick="moveCat(${i}, -1)">▲</button>
-            <button class="cfg-arr" ${i === cfgCatalogs.length - 1 ? 'disabled' : ''} onclick="moveCat(${i}, 1)">▼</button>
+            <button class="cfg-arr" ${i === 0 ? 'disabled' : ''} title="نقل إلى الأعلى" aria-label="نقل إلى الأعلى" onclick="moveCat(${i}, -1)">▲</button>
+            <button class="cfg-arr" ${i === cfgCatalogs.length - 1 ? 'disabled' : ''} title="نقل إلى الأسفل" aria-label="نقل إلى الأسفل" onclick="moveCat(${i}, 1)">▼</button>
         </div>`;
-    }).join('') || '<p class="cfg-hint">No catalogs available.</p>';
+    }).join('') || '<p class="cfg-hint">لا توجد كاتلوجات متاحة.</p>';
 }
 
 function toggleHide(i) {
@@ -314,9 +315,9 @@ async function saveConfig() {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg)
         });
         if (!res.ok) throw new Error();
-        state.textContent = 'Saved! Re-install the addon to apply changes.';
+        state.textContent = 'تم حفظ التفضيلات. أعد تثبيت الإضافة لتطبيق التغييرات.';
     } catch (e) {
-        state.textContent = 'Could not save. Please try again.';
+        state.textContent = 'تعذّر حفظ التفضيلات. حاول مرة أخرى.';
     } finally {
         btn.disabled = false;
     }
@@ -330,8 +331,8 @@ function copyUrl() {
     const url = document.getElementById('murl').textContent.trim();
     navigator.clipboard.writeText(url).then(() => {
         const b = document.querySelector('.btn-copy');
-        b.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-        setTimeout(() => b.innerHTML = '<i class="fa-solid fa-copy"></i> Copy URL', 2000);
+        b.innerHTML = '<i class="fa-solid fa-check"></i> تم نسخ الرابط';
+        setTimeout(() => b.innerHTML = '<i class="fa-solid fa-copy"></i> نسخ الرابط', 2000);
     });
 }
 </script>
