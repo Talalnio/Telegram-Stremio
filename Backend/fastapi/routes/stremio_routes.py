@@ -1293,7 +1293,8 @@ async def configure_addon(token: str, request: Request):
 
     def _fmt(when):
         try:
-            return when.strftime("%d %b %Y").lstrip("0")
+            months = ("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
+            return f"{when.day} {months[when.month - 1]} {when.year}"
         except Exception:
             return "N/A"
 
@@ -1312,9 +1313,9 @@ async def configure_addon(token: str, request: Request):
             except Exception:
                 user = None
         if user:
-            user_name = user.get("first_name") or user.get("username") or f"User {uid}"
+            user_name = user.get("first_name") or user.get("username") or f"مستخدم {uid}"
         elif uid:
-            user_name = f"User {uid}"
+            user_name = f"مستخدم {uid}"
 
         token_expiry = token_doc.get("expires_at")
         if is_admin:
