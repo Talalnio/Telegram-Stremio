@@ -331,6 +331,17 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     def has(pattern: str, text: str = raw) -> bool:
         return match(pattern, text) is not None
 
+    # New descriptive tags must come from the release suffix, not the movie title.
+    # Prefer year/episode markers before resolution; without one, use the resolution.
+    resolution_marker = re.search(r"(?<![a-z0-9])(?:\d{3,4}[pi]|[248]k)(?![a-z0-9])", raw, re.I)
+    prefix = raw[:resolution_marker.start()] if resolution_marker else raw
+    markers = list(re.finditer(r"(?<!\d)(?:19|20)\d{2}(?!\d)|(?<![a-z0-9])s\d{1,3}e\d{1,3}(?!\d)", prefix, re.I))
+    suffix_start = markers[-1].end() if markers else (resolution_marker.end() if resolution_marker else None)
+    release_suffix = raw[suffix_start:] if suffix_start is not None else ""
+
+    def release_has(pattern: str) -> bool:
+        return has(r"(?<![^\W_])(?:" + pattern + r")(?![^\W_])", release_suffix)
+
     # Resolution: explicit release token first, then PTN/project quality.
     resolution = ""
     resolution_sources = f"{raw} {parsed.get('resolution') or ''} {quality or ''}"
@@ -341,8 +352,10 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         (r"(?<!\d)4320p(?!\d)", "8K Ultra HD"),
         (r"(?<!\d)2160p(?!\d)", "4K UHD"),
         (r"(?<!\d)1440p(?!\d)", "2K Quad HD"),
-        (r"(?<!\d)1080[pi]?(?!\d)|(?<![a-z])fhd(?![a-z])", "1080p FHD"),
-        (r"(?<!\d)720[pi]?(?!\d)", "720p HD"),
+        (r"(?<!\d)1080i(?![a-z0-9])", "1080i FHD"),
+        (r"(?<!\d)1080p?(?![a-z0-9])|(?<![a-z])fhd(?![a-z])", "1080p FHD"),
+        (r"(?<!\d)720i(?![a-z0-9])", "720i HD"),
+        (r"(?<!\d)720p?(?![a-z0-9])", "720p HD"),
         (r"(?<!\d)576[pi]?(?!\d)", "576P SD"),
         (r"(?<!\d)480[pi]?(?!\d)", "480p SD"),
         (r"(?<!\d)360[pi]?(?!\d)", "360P SD"),
@@ -360,7 +373,7 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     # Source. Check specific variants before generic BluRay/WEB matches.
     source = ""
     source_checks = (
-        (r"(?<![a-z0-9])(?:bd[ ._-]?remux|blu[ ._-]?ray[ ._-]?remux|bluray[ ._-]?remux|uhd[ ._-]?remux|remux)(?![a-z0-9])", "BluRay REMUX"),
+        (r"(?<![a-z0-9])(?:bd[ ._-]?remux|blu[ ._-]?ray[ ._-]?remux|bluray[ ._-]?remux|uhd[ ._-]?remux)(?![a-z0-9])", "BluRay REMUX"),
         (r"(?<![a-z0-9])(?:uhd[ ._-]?blu[ ._-]?ray|uhd[ ._-]?bluray|blu[ ._-]?ray|bluray|bdrip|brrip|bdmv|bd25|bd50)(?![a-z0-9])", "BluRay"),
         (r"(?<![a-z0-9])(?:web[ ._-]?dl|webdl|web[ ._-]?mux)(?![a-z0-9])", "WEB-DL"),
         (r"(?<![a-z0-9])(?:web[ ._-]?rip|webrip)(?![a-z0-9])", "WEBRip"),
@@ -375,6 +388,11 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         if has(pattern):
             source = label
             break
+    if has(r"(?<![a-z0-9])remux(?![a-z0-9])"):
+        if source == "BluRay":
+            source = "BluRay REMUX"
+        elif "REMUX" not in source:
+            source = f"{source} REMUX".strip()
     if not source:
         p_quality = str(parsed.get("quality") or "").strip()
         # PTN's quality is useful only when it resembles a release source.
@@ -430,6 +448,9 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     if has(r"(?<![a-z0-9])hlg(?![a-z0-9])"):
         hdr.append("HLG")
 
+    if release_has(r"sdr"):
+        hdr.append("SDR")
+
     # Audio. Patterns allow codec + channel layouts with no separator (DDP5.1).
     audio = ""
     audio_checks = (
@@ -461,12 +482,15 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         audio = audio_aliases.get(low, p_audio)
 
     atmos = has(r"(?<![a-z0-9])(?:dolby[ ._-]?)?atmos(?![a-z0-9])")
-    dtsx = has(r"(?<![a-z0-9])dts[ ._-]?x(?![a-z0-9])")
+    dtsx = has(r"(?<![a-z0-9])dts[ ._:-]?x(?![a-z0-9])")
+    if dtsx and re.match(r"^dts[ ._:-]?x(?:\s|$)", audio, re.I):
+        # PTN can return "DTS:X 7.1" as the codec; channels are displayed separately.
+        audio = "DTS:X"
 
     # Channels: preserve dots by searching `raw`; also support 51/71 and CH forms.
     channels = ""
     channel_patterns = (
-        r"(?<!\d)(7\.1(?:\.4)?|5\.1(?:\.2|\.4)?|2\.1|2\.0|1\.0)(?:\s*ch(?:annels?)?)?(?!\d)",
+        r"(?<!\d)(7\.1(?:\.2|\.4)?|6\.1|5\.1(?:\.2|\.4)?|2\.1|2\.0|1\.0)(?:\s*ch(?:annels?)?)?(?!\d)",
         r"(?<![a-z0-9])(?:ch(?:annels?)?[ ._-]?)?(71|51|20)(?!\d)",
     )
     cm = match(channel_patterns[0])
@@ -477,7 +501,44 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         if cm:
             channels = {"71": "7.1", "51": "5.1", "20": "2.0"}.get(cm.group(1), "")
 
-    video_parts = [x for x in (source, codec, bit_depth) if x]
+    if not channels:
+        count = re.search(r"(?<![a-z0-9])(\d{1,2})[ ._-]?ch(?:annels?)?(?![a-z0-9])", release_suffix, re.I)
+        if count:
+            # Channel count alone does not establish an LFE layout (6ch != proven 5.1).
+            channels = f"{int(count.group(1))}ch"
+        elif release_has(r"stereo"):
+            channels = "Stereo"
+        elif release_has(r"mono"):
+            channels = "Mono"
+
+    editions = []
+    edition_checks = (
+        (r"imax[ ._-]+enhanced", "IMAX Enhanced"),
+        (r"imax", "IMAX"),
+        (r"extended(?:[ ._-]+(?:edition|cut))?", "Extended"),
+        (r"uncut", "Uncut"),
+        (r"director(?:['’]s|s)?[ ._-]+cut", "Director's Cut"),
+        (r"remastered", "Remastered"),
+    )
+    for pattern, label in edition_checks:
+        if release_has(pattern) and not (label == "IMAX" and "IMAX Enhanced" in editions):
+            editions.append(label)
+
+    extras = []
+    for pattern, label in (
+        (r"dual[ ._-]*audio", "Dual Audio"),
+        (r"multi[ ._-]*audio", "Multi Audio"),
+        (r"multi[ ._-]*subs?", "Multi Sub"),
+        (r"hard[ ._-]*subs?", "Hard Sub"),
+    ):
+        if release_has(pattern):
+            extras.append(label)
+    platforms = []
+    for pattern, label in ((r"amzn", "AMZN"), (r"nf", "NF"), (r"dsnp", "DSNP")):
+        if release_has(pattern):
+            platforms.append(label)
+
+    video_parts = [x for x in (source, codec, bit_depth, *platforms) if x]
     lines = []
     if video_parts:
         lines.append(f"✦ {' · '.join(video_parts)}")
@@ -490,7 +551,7 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         audio_parts.append("Atmos")
     if dtsx:
         audio_parts.append("DTS:X")
-    if audio and audio not in audio_parts:
+    if audio and audio not in audio_parts and not (dtsx and audio == "DTS"):
         audio_parts.append(audio)
     if audio_parts:
         audio_text = " · ".join(audio_parts)
@@ -500,6 +561,10 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
     elif channels:
         lines.append(f"♫ {channels}")
 
+    if editions:
+        lines.append(f"✧ {' · '.join(editions)}")
+    if extras:
+        lines.append(f"☷ {' · '.join(extras)}")
     if size:
         lines.append(f"⛁ {size}")
 
