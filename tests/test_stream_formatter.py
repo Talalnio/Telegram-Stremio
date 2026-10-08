@@ -24,7 +24,7 @@ class FormatterTests(unittest.TestCase):
             "Extended.Edition": "Extended", "Uncut": "Uncut", "Directors.Cut": "Director's Cut",
             "Director’s.Cut": "Director's Cut", "Remastered": "Remastered",
             "Dual.Audio": "Dual Audio", "MultiAudio": "Multi Audio", "MULTISUB": "Multi Sub",
-            "HARDSUB": "Hard Sub", "AMZN": "AMZN", "NF": "NF", "DSNP": "DSNP",
+            "HARDSUB": "Hard Sub", "AMZN": "Prime Video", "NF": "Netflix", "DSNP": "Disney+",
             "6CH": "6ch", "8CH": "8ch", "Stereo": "Stereo", "Mono": "Mono",
         }
         for token, expected in cases.items():
@@ -120,6 +120,36 @@ class FormatterTests(unittest.TestCase):
                         expected = (name, f"✦ {source} · {video}\n{audio}\n⛁ 2 GB")
                         self.assertEqual(format_details(filename, resolution, "2 GB"), expected)
 
+    def test_platform_names_and_placement(self):
+        aliases = {
+            "AMZN": "Prime Video", "Amazon.Prime.Video": "Prime Video", "Prime.Video": "Prime Video",
+            "NF": "Netflix", "Netflix": "Netflix", "DSNP": "Disney+", "Disney+": "Disney+",
+            "HMAX": "HBO Max", "HBO.Max": "HBO Max", "APTV": "Apple TV+", "ATVP": "Apple TV+",
+            "Apple.TV+": "Apple TV+", "Hulu": "Hulu", "PMTP": "Paramount+", "Paramount+": "Paramount+",
+            "PCKK": "Peacock", "PCOK": "Peacock", "Peacock": "Peacock",
+            "CRTC": "Crunchyroll", "CR": "Crunchyroll", "Crunchyroll": "Crunchyroll",
+            "STZ": "Starz", "Starz": "Starz",
+        }
+        for token, label in aliases.items():
+            for size in ("1.39 GB", "", None):
+                with self.subTest(token=token, size=size):
+                    name, details = format_details(f"Show.S01E01.1080p.{token}.WEB-DL.HEVC.mkv", "1080p", size)
+                    lines = details.splitlines()
+                    self.assertEqual(lines[0], "✦ WEB-DL · HEVC")
+                    self.assertEqual(lines[-1], f"⛁ {size} · {label}" if size else f"⛁ {label}")
+                    self.assertEqual(details.count(label), 1)
+                    self.assertNotIn("⛁  ·", details)
+
+    def test_platform_deduplication_and_title_boundaries(self):
+        _, details = format_details("Movie.2024.1080p.AMZN.Amazon.Prime.Video.NF.Netflix.mkv", "", "2 GB")
+        self.assertEqual(details.splitlines()[-1], "⛁ 2 GB · Prime Video · Netflix")
+        for title in ("Amazon", "Hulu", "Netflix", "Starz", "Peacock", "Crunchyroll"):
+            _, details = format_details(f"{title}.2024.1080p.WEB-DL.mkv", "", "2 GB")
+            self.assertEqual(details.splitlines()[-1], "⛁ 2 GB")
+        for token in ("NFiction", "AMZNextra", "Starzy", "Peacockish", "HMAXimum", "كلمةNF", "NFكلمة"):
+            _, details = format_details(f"Movie.2024.1080p.{token}.WEB-DL.mkv", "", "2 GB")
+            self.assertEqual(details.splitlines()[-1], "⛁ 2 GB")
+
     def test_real_parser(self):
         import PTN
         global format_details
@@ -128,7 +158,8 @@ class FormatterTests(unittest.TestCase):
             format_details = load_formatter(PATH.read_text(encoding="utf-8"), PTN)
             for case in (self.test_release_tags_and_separators, self.test_dtsx_aliases_without_duplicate_dts,
                          self.test_existing_release_regressions, self.test_title_words_and_embedded_substrings,
-                         self.test_no_invented_tags_and_no_duplicates):
+                         self.test_no_invented_tags_and_no_duplicates, self.test_platform_names_and_placement,
+                         self.test_platform_deduplication_and_title_boundaries):
                 case()
         finally:
             format_details = original

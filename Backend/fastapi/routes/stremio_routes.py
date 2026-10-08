@@ -534,11 +534,23 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         if release_has(pattern):
             extras.append(label)
     platforms = []
-    for pattern, label in ((r"amzn", "AMZN"), (r"nf", "NF"), (r"dsnp", "DSNP")):
+    platform_checks = (
+        (r"amzn|amazon(?:[ ._-]+prime(?:[ ._-]+video)?)?|prime[ ._-]+video", "Prime Video"),
+        (r"nf|netflix", "Netflix"),
+        (r"dsnp|disney[ ._-]*\+|disney[ ._-]+plus", "Disney+"),
+        (r"hmax|hbo[ ._-]+max", "HBO Max"),
+        (r"aptv|atvp|apple[ ._-]+tv(?:[ ._-]*\+|[ ._-]+plus)?", "Apple TV+"),
+        (r"hulu", "Hulu"),
+        (r"pmtp|paramount[ ._-]*\+|paramount[ ._-]+plus", "Paramount+"),
+        (r"pckk|pcok|peacock", "Peacock"),
+        (r"crtc|cr|crunchyroll", "Crunchyroll"),
+        (r"stz|starz", "Starz"),
+    )
+    for pattern, label in platform_checks:
         if release_has(pattern):
             platforms.append(label)
 
-    video_parts = [x for x in (source, codec, bit_depth, *platforms) if x]
+    video_parts = [x for x in (source, codec, bit_depth) if x]
     lines = []
     if video_parts:
         lines.append(f"✦ {' · '.join(video_parts)}")
@@ -565,8 +577,11 @@ def format_stream_details(filename: str, quality: str, size: str, is_split: bool
         lines.append(f"✧ {' · '.join(editions)}")
     if extras:
         lines.append(f"☷ {' · '.join(extras)}")
-    if size:
-        lines.append(f"⛁ {size}")
+    if size or platforms:
+        # Keep the platform beside size, with no empty fields or leading separator.
+        summary = [str(size)] if size else []
+        summary.extend(platforms)
+        lines.append(f"⛁ {' · '.join(summary)}")
 
     # A stream can legitimately have only a size when its stored filename has no
     # technical release tags. Do not invent metadata or expose the full filename.
