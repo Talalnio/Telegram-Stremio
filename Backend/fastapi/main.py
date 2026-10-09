@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from Backend import __version__
+from Backend import __version__, db
 from Backend.fastapi.themes import DEFAULT_THEME, DEFAULT_STYLE, get_theme
 from Backend.fastapi.routes.api_routes import (
     add_custom_catalog_item_api,
@@ -117,7 +117,7 @@ from Backend.fastapi.routes.api_routes import (
 )
 from Backend.fastapi.routes.stream_routes import decay_client_failures
 from Backend.fastapi.routes.stream_routes import router as stream_router
-from Backend.fastapi.routes.stremio_routes import router as stremio_router
+from Backend.fastapi.routes.stremio_routes import _abs_media_url, router as stremio_router
 from Backend.fastapi.routes.webdav_routes import router as webdav_router
 from Backend.fastapi.routes.template_routes import (
     admin_access_page,
@@ -264,26 +264,36 @@ async def public_status():
     return {"status": "ok", "version": __version__}
 
 @app.get("/open/{app_name}/{media_type}/{content_id}", response_class=HTMLResponse)
-async def open_in_app(app_name: str, media_type: str, content_id: str):
+async def open_in_app(request: Request, app_name: str, media_type: str, content_id: str):
+    from urllib.parse import quote, urlsplit
+
     stremio_type = "series" if media_type in ("series", "tv") else "movie"
-    web = f"https://web.stremio.com/#/detail/{stremio_type}/{content_id}/{content_id}"
-    schemes = {
-        "nuvio": f"nuvio://meta?type={stremio_type}&id={content_id}",
-        "stremio": f"stremio:///detail/{stremio_type}/{content_id}",
-    }
-    scheme = schemes.get(app_name, schemes["stremio"])
-    label = "Nuvio" if app_name == "nuvio" else "Stremio"
-    html = f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Opening {label}…</title>
-<style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;text-align:center}}a{{color:#60a5fa}}.b{{display:inline-block;margin-top:16px;padding:12px 22px;background:#3b82f6;color:#fff;border-radius:12px;text-decoration:none;font-weight:700}}</style>
-</head><body><div><h2>Opening in {label}…</h2>
-<p>If nothing happens, use the buttons below.</p>
-<a class="b" href="{scheme}">Open {label}</a><br>
-<a class="b" style="background:#334155" href="{web}">Open Stremio Web</a></div>
-<script>setTimeout(function(){{window.location.href="{scheme}";}},200);</script>
-</body></html>"""
-    return HTMLResponse(html)
+    encoded_id = quote(content_id, safe="")
+    web = f"https://web.stremio.com/#/detail/{stremio_type}/{encoded_id}/{encoded_id}"
+    is_nuvio = app_name == "nuvio"
+    scheme = (
+        f"nuvio://meta?type={stremio_type}&id={encoded_id}"
+        if is_nuvio else f"stremio:///detail/{stremio_type}/{encoded_id}"
+    )
+    backdrop = ""
+    try:
+        media = await asyncio.wait_for(
+            db.get_media_details(imdb_id=content_id.split(":", 1)[0]), timeout=1.5
+        )
+        if media and media.get("backdrop"):
+            candidate = _abs_media_url(media["backdrop"])
+            parsed = urlsplit(candidate)
+            if parsed.scheme in ("https", "http") and parsed.netloc:
+                backdrop = candidate
+    except Exception:
+        # Artwork is optional; opening the app must still work without the database.
+        pass
+    return templates.TemplateResponse(
+        "open_in_app.html",
+        {"request": request, "label": "Nuvio" if is_nuvio else "Stremio",
+         "scheme": scheme, "web": web, "is_nuvio": is_nuvio, "backdrop": backdrop},
+        headers={"Referrer-Policy": "no-referrer"},
+    )
 
 
 #----- Protected routes (authentication required)

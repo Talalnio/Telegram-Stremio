@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>فتح المحتوى في {{ label }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100svh; display: grid; place-items: center; padding: 24px; background: #0f172a; color: #f8fafc; font-family: Tahoma, Arial, sans-serif; text-align: center; }
+    .backdrop, .shade { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .backdrop { object-fit: cover; }
+    .shade { background: linear-gradient(180deg, rgba(15,23,42,.72), rgba(15,23,42,.94)); }
+    main { position: relative; width: min(100%, 440px); padding: 32px 24px; border: 1px solid rgba(255,255,255,.12); border-radius: 24px; background: rgba(15,23,42,.8); box-shadow: 0 16px 60px rgba(0,0,0,.3); }
+    h1 { font-size: 24px; line-height: 1.6; margin: 0 0 20px; }
+    p { color: #cbd5e1; line-height: 1.8; margin: 0 0 20px; }
+    .actions { display: grid; gap: 12px; }
+    .button { padding: 14px 20px; border-radius: 12px; background: #2563eb; color: white; text-decoration: none; font-weight: bold; line-height: 1.6; }
+    .secondary { background: #334155; }
+    .button:hover { filter: brightness(1.12); }
+    .button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 4px; }
+  </style>
+</head>
+<body>
+  {% if backdrop %}<img class="backdrop" src="{{ backdrop }}" alt="" referrerpolicy="no-referrer">{% endif %}
+  <div class="shade" aria-hidden="true"></div>
+  <main>
+    <h1>جارٍ فتح المحتوى في <bdi>{{ label }}</bdi>…</h1>
+    {% if not is_nuvio %}<p>إذا لم يفتح التطبيق تلقائياً، يمكنك استخدام أحد الخيارين أدناه.</p>{% endif %}
+    <div class="actions">
+      <a class="button" href="{{ scheme }}">فتح في <bdi>{{ label }}</bdi></a>
+      {% if not is_nuvio %}<a class="button secondary" href="{{ web }}">فتح في <bdi>Stremio Web</bdi></a>{% endif %}
+    </div>
+  </main>
+  <script>setTimeout(function () { window.location.href = {{ scheme | tojson }}; }, 200);</script>
+</body>
+</html>
