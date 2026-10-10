@@ -1,0 +1,48 @@
+<section class="settings-card" dir="rtl" style="padding:24px;margin-bottom:24px">
+<h2>إضافات المصادر</h2>
+<p>أضف رابط manifest لإضافة Stremio. يبقى الرابط محفوظاً مشفّراً ولا يظهر للمشتركين. التشغيل يمر عبر السيرفر لحماية الروابط.</p>
+<form id="external-addon-form" style="display:grid;gap:16px">
+<label>اسم الإضافة <input class="s-input" id="external-addon-name" maxlength="80" required></label>
+<label>رابط الإضافة <input class="s-input" id="external-addon-url" type="password" autocomplete="off" required style="width:100%;direction:ltr"></label>
+<label><input type="checkbox" id="external-stream" checked> المصادر</label>
+<label><input type="checkbox" id="external-catalog"> الكاتلوجات</label>
+<label><input type="checkbox" id="external-subtitles" checked> الترجمات</label>
+<button class="add-btn" type="submit">اختبار وحفظ الإضافة</button>
+</form>
+<p id="external-addon-status" role="status"></p>
+<div id="external-addon-list"></div>
+<p>بعد تغيير الكاتلوجات، حدّث تثبيت الإضافة في Stremio. تدعم هذه النسخة روابط HTTP وHTTPS على المنافذ القياسية؛ مصادر التورنت والروابط الخارجية غير مدعومة هنا.</p>
+</section>
+<script>
+(() => {
+ let csrf = '', busy = false;
+ const status = document.getElementById('external-addon-status');
+ async function load() {
+  const response = await fetch('/api/admin/external-addons', {cache:'no-store'});
+  if (!response.ok) throw new Error('تعذّر تحميل الإضافات.');
+  const data = await response.json(); csrf = data.csrf;
+  const list = document.getElementById('external-addon-list'); list.replaceChildren();
+  for (const addon of data.addons) {
+   const row = document.createElement('div');
+   const name = document.createElement('span'); name.textContent = addon.name + (addon.enabled ? ' — مفعّلة ' : ' — معطّلة '); row.append(name);
+   for (const [action,label] of [[addon.enabled?'disable':'enable',addon.enabled?'تعطيل':'تفعيل'],['remove','إزالة']]) {
+    const button=document.createElement('button'); button.className='add-btn'; button.style.margin='6px'; button.textContent=label;
+    button.onclick=async()=>{if(busy)return;busy=true;try {
+     const response=await fetch('/api/admin/external-addons/'+addon.id+'/'+action,{method:'POST',headers:{'X-CSRF-Token':csrf}});
+     if(!response.ok)throw new Error('تعذّر تحديث الإضافة.'); await load();
+    }catch(e){status.textContent=e.message;}finally{busy=false;}};row.append(button);
+   } list.append(row);
+  }
+ }
+ document.getElementById('external-addon-form').onsubmit=async(event)=>{
+  event.preventDefault();if(busy)return;busy=true;status.textContent='جارٍ التحقق…';
+  try {
+   const features=[];for(const [key,resource] of [['stream','stream'],['catalog','catalog'],['subtitles','subtitles']])if(document.getElementById('external-'+key).checked)features.push(resource);
+   const response=await fetch('/api/admin/external-addons',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({name:document.getElementById('external-addon-name').value,url:document.getElementById('external-addon-url').value,features})});
+   if(!response.ok)throw new Error('تعذّر التحقق من الإضافة. تحقق من الرابط وتوافق الموارد.');
+   document.getElementById('external-addon-url').value='';await load();status.textContent='تم حفظ الإضافة.';
+  }catch(e){status.textContent=e.message;}finally{busy=false;}
+ };
+ load().catch(e=>{status.textContent=e.message;});
+})();
+</script>

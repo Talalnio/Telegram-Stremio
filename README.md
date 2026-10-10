@@ -914,3 +914,30 @@ Install updated dependencies before restarting (`uv sync --locked`, or
 admin completes enrollment. Run isolated regression tests with
 `uv run --group dev python -m unittest discover -s tests -v`; the tests use a mock
 database and never connect to Telegram or the live database.
+
+
+### External Stremio addons
+
+The administrator can configure HTTP(S) Stremio manifest URLs in Settings →
+إضافات المصادر. Select streams, catalogs, and/or subtitles. Catalogs also enable
+metadata automatically. Addons can be disabled or removed without changing Telegram
+sources. Reinstall/update the Stremio addon after changing catalog selections.
+
+Manifest URLs and upstream media URLs are encrypted in the tracking database using
+the persistent session secret. They are never returned by the management list API.
+External IDs are namespaced; image, subtitle, file and HLS URLs are relayed through
+account-bound links. Both master playlists and HLS URI attributes are rewritten.
+Public destinations on ports 80/443 only are supported; DNS addresses are checked
+and pinned, including redirects. Torrent hashes, browser external links, nonstandard
+ports and non-HTTP protocols are deliberately excluded from this bridge.
+
+Relayed video uses VPS bandwidth. There is a per-process cap of 16 active relays;
+this is not a provider-account concurrency guarantee. Upstream request headers are
+restricted, secrets are not forwarded across redirects, and telemetry never returns
+external credentials. Provider errors leave Telegram streams available.
+
+External configuration lives in separate collections and is not included in the
+existing configuration export. Preserve the tracking database and session secret
+when moving a deployment. Changing that secret while addons exist is rejected.
+Test actual playback in your Stremio clients before deploying broadly; protocol
+fixtures do not establish every provider's or media format's compatibility.

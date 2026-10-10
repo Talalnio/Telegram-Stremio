@@ -1,3 +1,4 @@
+from Backend.helper import external_addons
 from Backend.helper.catalog_labels import DEFAULT_CATALOG_LABELS, catalog_display_name
 import asyncio
 import re
@@ -169,6 +170,21 @@ def _parse_stremio_id(id: str):
         "absolute_episode": absolute_episode,
         "is_kitsu": is_kitsu,
     }
+
+
+async def _external_title_allowed(ident: str, token_data: dict) -> bool:
+    _, original = await external_addons.resolve(ident)
+    if not original:
+        return False
+    raw_id = original["id"]
+    if raw_id.startswith("tt"):
+        return await _title_allowed(imdb_id=raw_id.split(":", 1)[0], token_data=token_data)
+    if raw_id.startswith("kitsu:"):
+        try:
+            return await _title_allowed(kitsu_id=int(raw_id.split(":")[1]), token_data=token_data)
+        except (ValueError, IndexError):
+            return False
+    return True
 
 
 async def _title_allowed(imdb_id: str = None, token_data: dict = None, kitsu_id: int = None) -> bool:
@@ -729,6 +745,12 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
             pass
 
 
+    if not SettingsManager.current().hide_catalog:
+        catalogs.extend(await external_addons.catalogs())
+
+    hidden_external = set((token_data.get("config") or {}).get("hidden_catalogs") or [])
+    catalogs = [c for c in catalogs if c["id"] not in hidden_external and f"{c['id']}::{c['type']}" not in hidden_external]
+
     addon_name = ADDON_NAME
     addon_desc = "High-quality Movies • TV Shows • Anime"
     addon_version = ADDON_VERSION
@@ -760,10 +782,10 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
         "name": addon_name,
         "logo": f"{SettingsManager.current().base_url.rstrip('/')}/static/addon-logo.png",
         "description": addon_desc,
-        "types": ["movie", "series"],
+        "types": await external_addons.content_types(),
         "resources": resources,
         "catalogs": catalogs,
-        "idPrefixes": ["tt", "tg", "kitsu"],
+        "idPrefixes": ["tt", "tg", "kitsu", "xadd:"],
         "behaviorHints": {
             "configurable": True,
             "configurationRequired": False
@@ -785,6 +807,11 @@ async def get_manifest(token: str, token_data: dict = Depends(verify_token)):
 async def get_catalog(token: str, media_type: str, id: str, extra: Optional[str] = None, token_data: dict = Depends(verify_token)):
     if SettingsManager.current().hide_catalog:
         raise HTTPException(status_code=404, detail="Catalog disabled")
+
+    if id.startswith("xadd_"):
+        if token_data.get("subscription_expired"):
+            return {"metas": []}
+        return await external_addons.catalog(token, media_type, id, extra)
 
     if media_type not in ["movie", "series"]:
         raise HTTPException(status_code=404, detail="Invalid catalog type")
@@ -861,6 +888,11 @@ async def get_catalog(token: str, media_type: str, id: str, extra: Optional[str]
 async def get_meta(token: str, media_type: str, id: str, token_data: dict = Depends(verify_token)):
     if SettingsManager.current().hide_catalog:
         raise HTTPException(status_code=404, detail="Catalog disabled")
+
+    if id.startswith("xadd:"):
+        if token_data.get("subscription_expired") or not await _external_title_allowed(id, token_data):
+            return {"meta": {}}
+        return await external_addons.resource("meta", token, media_type, id)
 
     parsed = _parse_stremio_id(id)
     imdb_id = parsed["imdb_id"] if not parsed["is_kitsu"] else None
@@ -967,6 +999,12 @@ async def get_meta(token: str, media_type: str, id: str, token_data: dict = Depe
 @router.get("/{token}/subtitles/{media_type}/{id}/{extra:path}.json")
 @router.get("/{token}/subtitles/{media_type}/{id}.json")
 async def get_subtitles(token: str, media_type: str, id: str, extra: Optional[str] = None, token_data: dict = Depends(verify_token)):
+    if token_data.get("subscription_expired") or token_data.get("limit_exceeded"):
+        return {"subtitles": []}
+    if id.startswith("xadd:"):
+        if not await _external_title_allowed(id, token_data):
+            return {"subtitles": []}
+        return await external_addons.resource("subtitles", token, media_type, id, extra)
     try:
         parts = id.split(":")
         imdb_id = parts[0]
@@ -974,12 +1012,13 @@ async def get_subtitles(token: str, media_type: str, id: str, extra: Optional[st
         episode = int(parts[2]) if len(parts) > 2 else None
     except (ValueError, IndexError):
         return {"subtitles": []}
-
+    if not await _title_allowed(imdb_id=imdb_id, token_data=token_data):
+        return {"subtitles": []}
     db_media_type = "tv" if media_type == "series" else "movie"
     subs = await get_subtitles_for(imdb_id, db_media_type, season, episode)
-    if not subs:
-        return {"subtitles": []}
-    return {"subtitles": stremio_subtitle_entries(subs, token, SettingsManager.current().base_url)}
+    result = stremio_subtitle_entries(subs, token, SettingsManager.current().base_url) if subs else []
+    remote = await external_addons.resource("subtitles", token, media_type, id, extra)
+    return {"subtitles": result + remote["subtitles"]}
 
 
 async def _kitsu_title_year(kitsu_id: int) -> tuple:
@@ -1246,6 +1285,11 @@ async def get_streams(
             ]
         }
 
+    if id.startswith("xadd:"):
+        if not await _external_title_allowed(id, token_data):
+            return {"streams": []}
+        return await external_addons.resource("stream", token, media_type, id)
+
     try:
         parsed = _parse_stremio_id(id)
         imdb_id = parsed["imdb_id"]
@@ -1325,6 +1369,9 @@ async def get_streams(
             )
         except Exception as e:
             LOGGER.error(f"[GLOBAL SEARCH] stream search failed for {id}: {e}")
+
+    remote = await external_addons.resource("stream", token, media_type, id)
+    streams.extend(remote["streams"])
 
     #----- Per-token quality filter (fall back to all if it would hide everything)
     config = token_data.get("config") or {}
@@ -1450,6 +1497,7 @@ async def _addon_catalogs_for_token(token_data: dict) -> list:
                 entries.append({"id": cid, "name": name, "type": "series"})
     except Exception:
         pass
+    entries.extend(await external_addons.catalogs())
     for e in entries:
         e["key"] = f"{e['id']}::{e['type']}"
     order = await db.get_catalog_order()

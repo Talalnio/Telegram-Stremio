@@ -1,3 +1,4 @@
+from Backend.fastapi.routes.external_addon_routes import router as external_addon_router
 from Backend.fastapi.routes.security_routes import router as security_router
 import asyncio
 
@@ -173,6 +174,7 @@ async def _startup():
 #----- Streaming and Stremio routers
 app.include_router(stream_router)
 app.include_router(stremio_router)
+app.include_router(external_addon_router)
 app.include_router(webdav_router)
 
 
