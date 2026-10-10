@@ -13,6 +13,7 @@ from fastapi.responses import Response as PlainResponse
 from fastapi.responses import StreamingResponse
 
 from Backend import db
+from Backend.fastapi.security.credentials import require_auth
 from Backend.fastapi.security.tokens import verify_token
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
@@ -642,7 +643,7 @@ async def db_zip_media_streamer(request: Request, parts_payload: list, token: st
 
 #----- Live and recent stream telemetry, pruning stale active entries
 @router.get("/stream/stats")
-async def get_stream_stats():
+async def get_stream_stats(_: bool = Depends(require_auth)):
     now = time.time()
     PRUNE_SECONDS = 3
     INACTIVE_TIMEOUT = 15
@@ -710,16 +711,29 @@ async def get_stream_stats():
         "recent_streams": recent,
         "client_dc_map": client_dc_map,
         "work_loads": work_loads,
-    })
+    }, headers={"Cache-Control": "no-store"})
+
+
+def _stream_detail_payload(info: dict) -> dict:
+    # Explicitly expose telemetry only. Internal metadata contains bearer tokens.
+    fields = (
+        "stream_id", "msg_id", "chat_id", "dc_id", "client_index", "status",
+        "start_ts", "end_ts", "last_ts", "total_bytes", "duration",
+        "avg_mbps", "instant_mbps", "peak_mbps", "part_count", "prefetch",
+    )
+    payload = {key: info[key] for key in fields if key in info}
+    meta = info.get("meta") or {}
+    payload["meta"] = {key: meta[key] for key in ("title", "file_name") if key in meta}
+    return make_json_safe(payload)
 
 
 #----- Detailed telemetry for a single stream id
 @router.get("/stream/stats/{stream_id}")
-async def get_stream_detail(stream_id: str):
+async def get_stream_detail(stream_id: str, _: bool = Depends(require_auth)):
     info = ACTIVE_STREAMS.get(stream_id)
     if info:
-        return JSONResponse(make_json_safe(info))
+        return JSONResponse(_stream_detail_payload(info), headers={"Cache-Control": "no-store"})
     for rec in RECENT_STREAMS:
         if rec.get("stream_id") == stream_id:
-            return JSONResponse(make_json_safe(rec))
+            return JSONResponse(_stream_detail_payload(rec), headers={"Cache-Control": "no-store"})
     raise HTTPException(status_code=404, detail="Stream not found")
