@@ -6,7 +6,7 @@ import json
 import secrets
 import re
 from datetime import datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from cryptography.fernet import Fernet
 from Backend import db
 from Backend.helper.settings_manager import SettingsManager
@@ -68,9 +68,10 @@ async def add(url, name, features):
         raise AddonHTTPError("Invalid manifest")
     if len(manifest.get("catalogs", [])) > 100:
         raise AddonHTTPError("Too many catalogs")
-    selected = [f for f in features if f in SUPPORTED]
+    advertised = {spec if isinstance(spec, str) else spec.get("name") for spec in manifest["resources"] if isinstance(spec, (str, dict))}
+    selected = list(dict.fromkeys(f for f in features if isinstance(f, str) and f in SUPPORTED and f in advertised))
     # Metadata is necessary for externally supplied catalogs.
-    if "catalog" in selected and "meta" not in selected:
+    if "catalog" in selected and "meta" in advertised and "meta" not in selected:
         selected.append("meta")
     if not selected:
         raise AddonHTTPError("Choose at least one resource")
@@ -118,13 +119,17 @@ async def resolve(ident):
     addon = await collection().find_one({"_id": reference["addon"], "enabled": True})
     return addon, unseal(reference["private"]) if addon else None
 
-async def ticket(addon, token, url, headers=None):
+async def ticket(addon, token, url, headers=None, kind="media"):
+    extension = ""
+    if kind == "subtitle":
+        candidate = urlsplit(url).path.rsplit(".", 1)[-1].lower()
+        extension = "." + candidate if candidate in ("srt", "vtt", "ass", "ssa") else ".srt"
     parse_public_url(url)
-    key = hashlib.sha256((addon + "\0" + token + "\0" + url + "\0" + json.dumps(headers or {}, sort_keys=True)).encode()).hexdigest()
+    key = hashlib.sha256((addon + "\0" + token + "\0" + kind + "\0" + url + "\0" + json.dumps(headers or {}, sort_keys=True)).encode()).hexdigest()
     await ready()
     await collection("external_addon_tickets").update_one({"_id": key}, {"$set": {"addon": addon, "owner": hashlib.sha256(token.encode()).hexdigest(),
-        "expires": datetime.utcnow() + timedelta(hours=24), "private": seal({"url": url, "headers": headers or {}})}}, upsert=True)
-    return f"{SettingsManager.current().base_url.rstrip('/')}/addon-media/{token}/{key}"
+        "expires": datetime.utcnow() + timedelta(hours=24), "private": seal({"url": url, "headers": headers or {}, "kind": kind})}}, upsert=True)
+    return f"{SettingsManager.current().base_url.rstrip('/')}/addon-media/{token}/{key}{extension}"
 
 async def safe_meta(addon, token, meta, media_type):
     result = {k: meta[k] for k in ("name", "type", "description", "releaseInfo", "imdbRating", "genres", "runtime", "released") if k in meta}
@@ -162,8 +167,19 @@ async def request(addon, resource, media_type, ident, extra=None):
     async with _network_slots:
         return await asyncio.wait_for(fetch_json(private["base"] + "/" + path + ".json"), timeout=20)
 
-def stream_labels(item):
-    text = str(item.get("name") or "") + " " + str(item.get("title") or "")
+def stream_labels(item, formatter=None):
+    hints = item.get("behaviorHints") or {}
+    if formatter:
+        filename = str(hints.get("filename") or "")
+        text = re.sub(r"https?://\S+", "", str(item.get("name") or "") + " " + str(item.get("description") or item.get("title") or ""))
+        size_match = re.search(r"(?i)\d+(?:\.\d+)?\s*(?:GiB|MiB|GB|MB|KB)", text)
+        size = size_match.group(0) if size_match else ""
+        if not size and isinstance(hints.get("videoSize"), (int, float)) and hints["videoSize"] > 0:
+            size = f"{hints['videoSize'] / 1024 ** 2:.2f}MB"
+        name, title = formatter(filename or "Release.2024." + text, "", size)
+        title = "\n".join(line for line in title.splitlines() if "Unknown size" not in line)
+        return name, (title + "\n" if title else "") + "مصدر خارجي"
+    text = str(item.get("name") or "") + " " + str(item.get("description") or item.get("title") or "")
     resolution = re.search(r"(?i)(?<![a-z0-9])(?:2160p|1440p|1080p|720p|480p|360p|4k|8k)(?![a-z0-9])", text)
     tags = []
     for pattern, label in ((r"web[ ._-]?dl", "WEB-DL"), (r"webrip", "WEBRip"),
@@ -179,7 +195,7 @@ def stream_labels(item):
     name = "T7cine+" + (" · " + resolution.group(0).upper() if resolution else "")
     return name, " · ".join(tags) or "مصدر خارجي"
 
-async def resource(resource, token, media_type, ident, extra=None):
+async def resource(resource, token, media_type, ident, extra=None, formatter=None):
     result = []
     if ident.startswith("xadd:"):
         addon, original = await resolve(ident)
@@ -201,10 +217,15 @@ async def resource(resource, token, media_type, ident, extra=None):
                     continue
                 if resource == "stream":
                     headers = (item.get("behaviorHints") or {}).get("proxyHeaders", {}).get("request", {})
-                    name, title = stream_labels(item)
+                    name, title = stream_labels(item, formatter)
                     entry = {"name": name, "title": title, "url": await ticket(addon["_id"], token, item["url"], headers), "behaviorHints": {"notWebReady": True}}
+                    hints = item.get("behaviorHints") or {}
+                    if re.fullmatch(r"[0-9a-fA-F]{16}", str(hints.get("videoHash") or "")):
+                        entry["behaviorHints"]["videoHash"] = hints["videoHash"]
+                    if isinstance(hints.get("videoSize"), int) and 0 < hints["videoSize"] < 100 * 1024 ** 4:
+                        entry["behaviorHints"]["videoSize"] = hints["videoSize"]
                 else:
-                    entry = {"id": secrets.token_hex(8), "lang": str(item.get("lang") or "und"), "url": await ticket(addon["_id"], token, item["url"])}
+                    entry = {"id": secrets.token_hex(8), "lang": str(item.get("lang") or "und"), "url": await ticket(addon["_id"], token, item["url"], (item.get("behaviorHints") or {}).get("proxyHeaders", {}).get("request", {}), kind="subtitle")}
                 result.append(entry)
         except Exception:
             continue  # Upstream errors must not expose configured URLs or break Telegram.

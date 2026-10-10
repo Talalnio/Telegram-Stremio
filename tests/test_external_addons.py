@@ -75,6 +75,11 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(self.http.AddonHTTPError): await self.configure()
         self.assertEqual(len(await self.addons.catalogs()), 1)
 
+    async def test_features_reflect_advertised_resources(self):
+        self.manifest["resources"] = ["subtitles"]
+        ident = await self.addons.add("https://provider.example/manifest.json", "Subs", ["stream", "catalog", "subtitles"])
+        self.assertEqual(self.collections["external_addons"].rows[ident]["features"], ["subtitles"])
+
     async def test_resource_matching(self):
         manifest = {"types":["movie"], "resources":[{"name":"stream","types":["series"],"idPrefixes":["kitsu:"]}]}
         self.assertTrue(self.addons.supports(manifest,"stream","series","kitsu:12"))
@@ -112,6 +117,35 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["subtitles"][0]["lang"], "ara")
         self.assertNotIn("private.srt",str(result))
 
+    async def test_external_formatter_uses_filename_description_and_size(self):
+        from test_stream_formatter import format_details
+        item = {"name": "provider 1080p", "description": "size 1.39GB",
+                "behaviorHints": {"filename": "Release.2024.1080p.AMZN.WEB-DL.HEVC.Atmos.DDP5.1.mkv"}}
+        name, title = self.addons.stream_labels(item, format_details)
+        self.assertEqual(name, "1080p FHD")
+        self.assertIn("WEB-DL", title)
+        self.assertIn("HEVC", title)
+        self.assertIn("Atmos", title)
+        self.assertIn("5.1", title)
+        self.assertIn("1.39GB · Prime Video", title)
+        self.assertEqual(title.splitlines()[-1], "مصدر خارجي")
+        item = {"description": "1080p WEB-DL HEVC 10-bit HDR10+ AAC 2.0 750MB"}
+        name, title = self.addons.stream_labels(item, format_details)
+        self.assertEqual(name, "1080p FHD")
+        self.assertIn("10-bit", title)
+        self.assertIn("750MB", title)
+        self.assertNotIn("Unknown size", self.addons.stream_labels({}, format_details)[1])
+
+    async def test_subtitle_extension_and_ticket_kinds(self):
+        ident = await self.configure()
+        url = "https://subs.example/download?secret=hidden"
+        subtitle = await self.addons.ticket(ident, "user", url, kind="subtitle")
+        video = await self.addons.ticket(ident, "user", url)
+        self.assertTrue(subtitle.endswith(".srt"))
+        self.assertNotEqual(subtitle.rsplit("/", 1)[1].split(".")[0], video.rsplit("/", 1)[1])
+        vtt = await self.addons.ticket(ident, "user", "https://subs.example/a.vtt", kind="subtitle")
+        self.assertTrue(vtt.endswith(".vtt"))
+
     async def test_failures_and_unsupported_streams(self):
         await self.configure()
         self.addons.fetch_json.side_effect = self.http.AddonHTTPError("failed")
@@ -119,6 +153,25 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.addons.fetch_json.side_effect = None
         self.addons.fetch_json.return_value = {"streams":[{"infoHash":"abc"},{"url":"file:///etc/passwd"},{"externalUrl":"https://example.com"}]}
         self.assertEqual(await self.addons.resource("stream","user","movie","tt123"), {"streams":[]})
+
+    def test_subtitle_unpacking_preserves_timing_and_limits(self):
+        import gzip
+        import io
+        import zipfile
+        tree = ast.parse((ROOT / "Backend/fastapi/routes/external_addon_routes.py").read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "subtitle_body")
+        scope = {"AddonHTTPError": self.http.AddonHTTPError}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "subtitles", "exec"), scope)
+        normalize = scope["subtitle_body"]
+        original = "1\n00:00:01,000 --> 00:00:02,000\nترجمة\n".encode("utf-8")
+        self.assertEqual(normalize(gzip.compress(original)), original)
+        self.assertEqual(normalize(original.decode("utf-8").encode("utf-16")), original)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("../../subtitle.srt", original)
+        self.assertEqual(normalize(archive.getvalue()), original)
+        for content in (b"<html>error</html>", gzip.compress(b"x" * (4 * 1024 * 1024 + 1))):
+            with self.assertRaises(self.http.AddonHTTPError): normalize(content)
 
     def test_public_addresses_and_urls(self):
         for address in ("127.0.0.1","10.0.0.1","169.254.169.254","::1","::ffff:127.0.0.1","224.0.0.1"):
@@ -157,6 +210,7 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         content=[b"video bytes"]
         class Upstream(io.BytesIO):
             status=200
+            def read1(self, count): return super().read1(min(count, 3))
             def getheader(self, key): return {"Content-Type":"video/mp4","Content-Length":str(len(content[0]))}.get(key)
         def open_public(url, headers, method):
             calls.append((url,headers,method))
@@ -184,6 +238,22 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("cdn.example",response.text)
         self.assertNotIn('URI="key.bin"',response.text)
         self.assertIn("/addon-media/user/",response.text)
+        # Subtitle URLs retain an extension, exact bytes and a usable content type.
+        subtitle = await self.addons.ticket(ident, "user", "https://cdn.example/download", kind="subtitle")
+        content[0] = b"1\n00:00:01,000 --> 00:00:02,000\nSubtitle\n"
+        response = client.get(subtitle.replace("https://our.example", ""))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, content[0])
+        self.assertIn("application/x-subrip", response.headers["content-type"])
+        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+        content[0] = b"<html>upstream error</html>"
+        self.assertEqual(client.get(subtitle.replace("https://our.example", "")).status_code, 502)
+        Upstream.status = 206
+        content[0] = b"range data"
+        self.assertEqual(client.get(path).status_code, 206)
+        Upstream.status = 416
+        self.assertEqual(client.get(path).status_code, 416)
+        Upstream.status = 200
         self.collections["external_addons"].rows[ident]["enabled"]=False
         self.assertEqual(client.get(path).status_code,404)
         self.collections["external_addons"].rows[ident]["enabled"]=True
@@ -191,6 +261,25 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.collections["external_addon_tickets"].rows[key]["expires"]=datetime(2000,1,1)
         self.assertEqual(client.get(path).status_code,404)
         self.assertEqual(scope["relay_slots"]._value,16)
+        # An aborted seek must not leak the relay slot or the pending socket.
+        import threading
+        from datetime import timedelta
+        opened = threading.Event(); finish = threading.Event(); closed = threading.Event()
+        def delayed_open(*args):
+            opened.set(); finish.wait(2)
+            return types.SimpleNamespace(close=closed.set), Upstream(b"bytes"), "https://cdn.example/movie.mp4"
+        scope["open_public"] = delayed_open
+        self.collections["external_addon_tickets"].rows[key]["expires"] = datetime.utcnow() + timedelta(hours=1)
+        request = Request({"type":"http", "method":"GET", "path":path, "headers":[], "query_string":b""})
+        operation = asyncio.create_task(scope["relay"](request, "user", key, {}))
+        await asyncio.to_thread(opened.wait, 2)
+        operation.cancel()
+        with self.assertRaises(asyncio.CancelledError): await operation
+        finish.set()
+        self.assertTrue(await asyncio.to_thread(closed.wait, 2))
+        await asyncio.sleep(0.01)
+        self.assertEqual(scope["relay_slots"]._value,16)
+
 
     def test_admin_mutations_use_csrf_and_auth(self):
         tree=ast.parse((ROOT / "Backend/fastapi/routes/external_addon_routes.py").read_text(encoding="utf-8"))

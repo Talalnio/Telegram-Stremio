@@ -6,6 +6,7 @@
 <label>رابط الإضافة <input class="s-input" id="external-addon-url" type="password" autocomplete="off" required style="width:100%;direction:ltr"></label>
 <label><input type="checkbox" id="external-stream" checked> المصادر</label>
 <label><input type="checkbox" id="external-catalog"> الكاتلوجات</label>
+<label><input type="checkbox" id="external-meta"> البيانات التعريفية</label>
 <label><input type="checkbox" id="external-subtitles" checked> الترجمات</label>
 <button class="add-btn" type="submit">اختبار وحفظ الإضافة</button>
 </form>
@@ -25,6 +26,12 @@
   for (const addon of data.addons) {
    const row = document.createElement('div');
    const name = document.createElement('span'); name.textContent = addon.name + (addon.enabled ? ' — مفعّلة ' : ' — معطّلة '); row.append(name);
+   const labels={stream:"▶ مصادر",catalog:"▦ كاتلوجات",meta:"ⓘ بيانات تعريفية",subtitles:"▤ ترجمات"};
+   for(const feature of addon.features || []) {
+    if(!labels[feature])continue;
+    const badge=document.createElement("span");badge.textContent=labels[feature];
+    badge.style.cssText="display:inline-block;padding:5px 9px;margin:4px;border:1px solid var(--border-color,#555);border-radius:12px;font-size:12px";row.append(badge);
+   }
    for (const [action,label] of [[addon.enabled?'disable':'enable',addon.enabled?'تعطيل':'تفعيل'],['remove','إزالة']]) {
     const button=document.createElement('button'); button.className='add-btn'; button.style.margin='6px'; button.textContent=label;
     button.onclick=async()=>{if(busy)return;busy=true;try {
@@ -37,7 +44,7 @@
  document.getElementById('external-addon-form').onsubmit=async(event)=>{
   event.preventDefault();if(busy)return;busy=true;status.textContent='جارٍ التحقق…';
   try {
-   const features=[];for(const [key,resource] of [['stream','stream'],['catalog','catalog'],['subtitles','subtitles']])if(document.getElementById('external-'+key).checked)features.push(resource);
+   const features=[];for(const [key,resource] of [['stream','stream'],['catalog','catalog'],['meta','meta'],['subtitles','subtitles']])if(document.getElementById('external-'+key).checked)features.push(resource);
    const response=await fetch('/api/admin/external-addons',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({name:document.getElementById('external-addon-name').value,url:document.getElementById('external-addon-url').value,features})});
    if(!response.ok)throw new Error('تعذّر التحقق من الإضافة. تحقق من الرابط وتوافق الموارد.');
    document.getElementById('external-addon-url').value='';await load();status.textContent='تم حفظ الإضافة.';

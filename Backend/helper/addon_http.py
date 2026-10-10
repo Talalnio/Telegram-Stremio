@@ -78,9 +78,12 @@ def open_public(url, headers=None, method="GET"):
                 connection.close()
                 if not location:
                     raise AddonHTTPError("Invalid redirect")
-                url = urljoin(url, location)
-                # Credentials and referer are never forwarded across redirect origins.
-                headers = {k: v for k, v in (headers or {}).items() if k.lower() in ("range", "if-range", "user-agent")}
+                target = urljoin(url, location)
+                next_url, next_port = parse_public_url(target)
+                if (next_url.scheme, next_url.hostname, next_port) != (parsed.scheme, parsed.hostname, port):
+                    # Never disclose credentials to a different redirect origin.
+                    headers = {k: v for k, v in (headers or {}).items() if k.lower() in ("range", "if-range", "user-agent")}
+                url = target
                 continue
             return connection, response, url
         except AddonHTTPError:

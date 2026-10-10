@@ -1288,7 +1288,7 @@ async def get_streams(
     if id.startswith("xadd:"):
         if not await _external_title_allowed(id, token_data):
             return {"streams": []}
-        return await external_addons.resource("stream", token, media_type, id)
+        return await external_addons.resource("stream", token, media_type, id, formatter=format_stream_details)
 
     try:
         parsed = _parse_stremio_id(id)
@@ -1370,7 +1370,7 @@ async def get_streams(
         except Exception as e:
             LOGGER.error(f"[GLOBAL SEARCH] stream search failed for {id}: {e}")
 
-    remote = await external_addons.resource("stream", token, media_type, id)
+    remote = await external_addons.resource("stream", token, media_type, id, formatter=format_stream_details)
     streams.extend(remote["streams"])
 
     #----- Per-token quality filter (fall back to all if it would hide everything)

@@ -941,3 +941,23 @@ existing configuration export. Preserve the tracking database and session secret
 when moving a deployment. Changing that secret while addons exist is rejected.
 Test actual playback in your Stremio clients before deploying broadly; protocol
 fixtures do not establish every provider's or media format's compatibility.
+
+
+### External addon playback fixes (v5.0.9)
+
+External stream descriptions now use the same release formatter as Telegram,
+including upstream `description` and `behaviorHints.filename` / `videoSize`.
+The external-source label appears on the final line. Admin settings show enabled
+resource badges and allow metadata-only integrations.
+
+The authenticated relay forwards available bytes with `read1` instead of waiting
+for a full video block, preserves range status 206/416, and batches usage writes
+at 8 MiB. Failed usage writes are retried with accumulated bytes rather than
+interrupting playback. Subtitle tickets retain a supported extension and return
+an explicit subtitle content type. Single-file SRT ZIPs, gzip and UTF-16 BOMs
+are handled in memory with a 4 MiB limit; cue timings are preserved.
+
+These checks cover relay behavior and fixtures, not end-to-end playback in every
+Stremio client or provider. Validate video seeking and subtitles on the deployed
+server before wider rollout. Provider/network throughput and subtitle matching
+remain properties of the selected source.
