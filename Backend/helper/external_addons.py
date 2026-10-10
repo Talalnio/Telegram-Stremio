@@ -141,7 +141,7 @@ async def safe_meta(addon, token, meta, media_type):
     for field in ("poster", "background", "logo"):
         if isinstance(meta.get(field), str) and meta[field]:
             try:
-                result[field] = await ticket(addon, token, meta[field])
+                result[field] = await ticket(addon, token, meta[field], kind="image")
             except AddonHTTPError:
                 pass
     videos = []

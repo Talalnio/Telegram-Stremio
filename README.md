@@ -961,3 +961,28 @@ These checks cover relay behavior and fixtures, not end-to-end playback in every
 Stremio client or provider. Validate video seeking and subtitles on the deployed
 server before wider rollout. Provider/network throughput and subtitle matching
 remain properties of the selected source.
+
+
+### External relay lifecycle fixes (v5.0.10)
+
+Relay ownership now covers both the streaming iterator and the ASGI response.
+Disconnects, failures before response headers, cancelled usage writes and upstream
+errors close sockets and release their slot exactly once. Cleanup wakes blocked
+HTTP reads before closing buffered responses. Usage updates have a two-second
+request deadline; resource cleanup happens before the final accounting await.
+
+Video keeps its existing limit of 16 active relays per process. Subtitle/image
+requests use a separate bounded pool of eight slots so ongoing video downloads
+do not starve them. Existing configured addons and subscriber tokens are retained.
+Reload the source/subtitle list to obtain current tickets after updating.
+
+HTTP errors from `/addon-media` return empty non-JSON responses. This avoids the
+installed Stremio subtitle downloader's JSON-to-object parser feeding an object
+to `Buffer.concat`, which caused its local server to exit. JSON upstream media
+responses are rejected. Management API errors retain their original behavior.
+
+Restart the running application after deploying: the fix cannot clear slots
+already leaked in an old process. Regression checks cover cancelled accounting,
+40 early response failures, blocked real socket reads, video pool saturation with
+subtitle access, token revocation and range/HLS behavior. End-to-end playback on
+the deployed service still needs validation after its restart.

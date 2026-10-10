@@ -192,6 +192,7 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         from datetime import datetime
         from urllib.parse import urljoin
         from fastapi import APIRouter, Depends, HTTPException, Request, FastAPI
+        from fastapi.routing import APIRoute
         from fastapi.responses import JSONResponse, Response, StreamingResponse
         from fastapi.testclient import TestClient
         async def auth(request: Request):
@@ -202,21 +203,25 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
             return {}
         scope = {"asyncio":asyncio,"hashlib":hashlib,"re":re,"datetime":datetime,"urljoin":urljoin,
                  "Depends":Depends,"HTTPException":HTTPException,"Request":Request,"APIRouter":APIRouter,
-                 "JSONResponse":JSONResponse,"Response":Response,"StreamingResponse":StreamingResponse,
+                 "JSONResponse":JSONResponse,"Response":Response,"StreamingResponse":StreamingResponse,"APIRoute":APIRoute,
                  "require_auth":auth,"verify_token":verify,"addons":self.addons,"AddonHTTPError":self.http.AddonHTTPError,
                  "check_csrf":lambda *a: None,"csrf_token":lambda *a:"test"}
-        scope["router"] = APIRouter(); scope["relay_slots"] = asyncio.Semaphore(16)
+        scope["relay_slots"] = asyncio.Semaphore(16); scope["asset_slots"] = asyncio.Semaphore(8)
         calls=[]
         content=[b"video bytes"]
+        content_type=["video/mp4"]
         class Upstream(io.BytesIO):
             status=200
             def read1(self, count): return super().read1(min(count, 3))
-            def getheader(self, key): return {"Content-Type":"video/mp4","Content-Length":str(len(content[0]))}.get(key)
+            def getheader(self, key): return {"Content-Type":content_type[0],"Content-Length":str(len(content[0]))}.get(key)
         def open_public(url, headers, method):
             calls.append((url,headers,method))
             return types.SimpleNamespace(close=lambda:None), Upstream(content[0]), url
         scope["open_public"] = open_public
         tree=ast.parse((ROOT / "Backend/fastapi/routes/external_addon_routes.py").read_text(encoding="utf-8"))
+        classes=[n for n in tree.body if isinstance(n,ast.ClassDef)]
+        exec(compile(ast.Module(body=classes,type_ignores=[]),"relay_classes","exec"),scope)
+        scope["router"] = APIRouter(route_class=scope["MediaErrorRoute"])
         nodes=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))]
         exec(compile(ast.Module(body=nodes,type_ignores=[]),"relay_test","exec"),scope)
         app=FastAPI(); app.include_router(scope["router"])
@@ -246,6 +251,26 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content, content[0])
         self.assertIn("application/x-subrip", response.headers["content-type"])
         self.assertEqual(response.headers["access-control-allow-origin"], "*")
+        # Video saturation must not prevent subtitles; busy/invalid responses
+        # must remain bytes rather than JSON objects parsed by Stremio's Needle.
+        for _ in range(16): await scope["relay_slots"].acquire()
+        try:
+            blocked = client.get(path)
+            self.assertEqual(blocked.status_code, 429)
+            self.assertEqual(blocked.content, b"")
+            self.assertNotIn("application/json", blocked.headers.get("content-type", ""))
+            self.assertEqual(client.get(subtitle.replace("https://our.example", "")).status_code, 200)
+        finally:
+            for _ in range(16): scope["relay_slots"].release()
+        invalid = client.get(path.replace("/user/", "/invalid/"))
+        self.assertEqual(invalid.content, b"")
+        self.assertNotIn("application/json", invalid.headers.get("content-type", ""))
+
+        content_type[0] = "application/json"
+        rejected = client.get(path)
+        self.assertEqual(rejected.status_code, 502)
+        self.assertEqual(rejected.content, b"")
+        content_type[0] = "video/mp4"
         content[0] = b"<html>upstream error</html>"
         self.assertEqual(client.get(subtitle.replace("https://our.example", "")).status_code, 502)
         Upstream.status = 206
@@ -261,6 +286,7 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         self.collections["external_addon_tickets"].rows[key]["expires"]=datetime(2000,1,1)
         self.assertEqual(client.get(path).status_code,404)
         self.assertEqual(scope["relay_slots"]._value,16)
+        scope["relay_slots"] = asyncio.Semaphore(16)
         # An aborted seek must not leak the relay slot or the pending socket.
         import threading
         from datetime import timedelta
@@ -280,6 +306,94 @@ class ExternalAddonTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.01)
         self.assertEqual(scope["relay_slots"]._value,16)
 
+
+    def relay_lifecycle_scope(self):
+        from fastapi.responses import StreamingResponse
+        tree = ast.parse((ROOT / "Backend/fastapi/routes/external_addon_routes.py").read_text(encoding="utf-8"))
+        scope = {"StreamingResponse": StreamingResponse}
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in ("RelayLease", "RelayResponse")]
+        exec(compile(ast.Module(body=classes, type_ignores=[]), "lifecycle", "exec"), scope)
+        relay = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "relay")
+        scope["chunk_node"] = next(n for n in ast.walk(relay) if isinstance(n, ast.AsyncFunctionDef) and n.name == "chunks")
+        return scope
+
+    async def test_cancelled_accounting_releases_slot_before_database_wait(self):
+        import io
+        scope = self.relay_lifecycle_scope()
+        slots = asyncio.Semaphore(16); await slots.acquire()
+        lease = scope["RelayLease"](slots)
+        upstream = io.BytesIO(b"")
+        lease.bind(types.SimpleNamespace(close=lambda: None), upstream)
+        accounting = asyncio.Event()
+        async def slow_accounting(*args):
+            accounting.set()
+            await asyncio.Event().wait()
+        scope.update(asyncio=asyncio, lease=lease, upstream=upstream, prefix=b"bytes", token="user",
+                     request=types.SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
+                     addons=types.SimpleNamespace(db=types.SimpleNamespace(update_token_usage=slow_accounting)))
+        exec(compile(ast.Module(body=[scope["chunk_node"]],type_ignores=[]), "chunks", "exec"),scope)
+        iterator = scope["chunks"]()
+        self.assertEqual(await anext(iterator), b"bytes")
+        closing = asyncio.create_task(iterator.aclose())
+        await asyncio.wait_for(accounting.wait(), 1)
+        self.assertEqual(slots._value, 16)
+        closing.cancel()
+        with self.assertRaises(asyncio.CancelledError): await closing
+        self.assertTrue(upstream.closed)
+        lease.close()
+        self.assertEqual(slots._value, 16)
+
+    async def test_cleanup_interrupts_real_socket_read_when_connection_socket_is_detached(self):
+        import socket
+        import http.client
+        import threading
+        scope = self.relay_lifecycle_scope()
+        slots = asyncio.Semaphore(1); await slots.acquire()
+        receiver, sender = socket.socketpair()
+        try:
+            receiver.settimeout(2)
+            sender.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\nConnection: close\r\n\r\nfirst")
+            upstream = http.client.HTTPResponse(receiver); upstream.begin()
+            self.assertEqual(upstream.read(5), b"first")
+            lease = scope["RelayLease"](slots)
+            lease.bind(types.SimpleNamespace(sock=None, close=lambda: None), upstream)
+            started = threading.Event()
+            def blocked_read():
+                started.set()
+                try: return upstream.read1(65536)
+                except (OSError, ValueError): return b""
+            reading = asyncio.create_task(asyncio.to_thread(blocked_read))
+            await asyncio.to_thread(started.wait, 1)
+            import time
+            started_close = time.monotonic()
+            lease.close()
+            self.assertLess(time.monotonic() - started_close, 1)
+            self.assertEqual(await asyncio.wait_for(reading, 1), b"")
+            self.assertEqual(slots._value, 1)
+        finally:
+            receiver.close(); sender.close()
+
+    async def test_send_failure_before_iterator_starts_cleans_every_seek(self):
+        scope = self.relay_lifecycle_scope()
+        slots = asyncio.Semaphore(16)
+        for _ in range(40):
+            await slots.acquire()
+            lease = scope["RelayLease"](slots)
+            closed = []
+            lease.bind(types.SimpleNamespace(close=lambda: closed.append(True)), None)
+            async def body():
+                yield b"bytes"
+            response = scope["RelayResponse"](body(), lease=lease)
+            async def send(message):
+                raise OSError("Client left before headers")
+            async def receive():
+                return {"type": "http.disconnect"}
+            from starlette.requests import ClientDisconnect
+            with self.assertRaises(ClientDisconnect):
+                await response({"type":"http", "asgi":{"spec_version":"2.4"}}, receive, send)
+            self.assertEqual(slots._value, 16)
+            lease.close()
+            self.assertEqual(len(closed), 1)
 
     def test_admin_mutations_use_csrf_and_auth(self):
         tree=ast.parse((ROOT / "Backend/fastapi/routes/external_addon_routes.py").read_text(encoding="utf-8"))
