@@ -70,12 +70,7 @@ body::before {
 }
 
 .brand { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 20px; }
-.brand-logo {
-    width: 44px; height: 44px; border-radius: 9999px;
-    background: var(--primary); color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 55%, transparent);
-}
+.brand-logo { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; }
 .brand-name {
     font-size: 1.6rem; font-weight: 800; letter-spacing: 0.02em;
     background: linear-gradient(90deg, var(--primary), var(--accent));
@@ -148,7 +143,7 @@ button { font-family: inherit; }
 <div class="layout">
 <div class="card">
     <div class="brand">
-        <div class="brand-logo"><i class="fa-solid fa-play"></i></div>
+        <img class="brand-logo" src="/static/brand-icon.png" alt="" width="56" height="56">
         <span class="brand-name" dir="ltr">T7cine+</span>
     </div>
 
