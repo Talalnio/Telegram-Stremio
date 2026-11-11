@@ -1,0 +1,102 @@
+ .dockerignore                                      |    1 [32m+[m
+ .github/workflows/huggingface-sync.yml             |   34 [31m-[m
+ Backend/__init__.py                                |    2 [32m+[m[31m-[m
+ Backend/__main__.py                                |    8 [32m+[m[31m-[m
+ Backend/fastapi/main.py                            |   83 [32m+[m[31m-[m
+ Backend/fastapi/routes/api_routes.py               |  119 [32m+[m[31m-[m
+ Backend/fastapi/routes/cf_routes.py                |   71 [32m+[m
+ Backend/fastapi/routes/external_addon_routes.py    |  272 [31m----[m
+ Backend/fastapi/routes/security_routes.py          |   46 [31m-[m
+ Backend/fastapi/routes/stream_routes.py            |   83 [32m+[m[31m-[m
+ Backend/fastapi/routes/stremio_routes.py           | 1704 [32m+++++++++++++++[m[31m-----[m
+ Backend/fastapi/routes/template_routes.py          |   74 [32m+[m[31m-[m
+ Backend/fastapi/security/credentials.py            |   28 [32m+[m[31m-[m
+ Backend/fastapi/security/two_factor.py             |  220 [31m---[m
+ Backend/fastapi/static/addon-logo.png              |  Bin [31m47252[m -> [32m0[m bytes
+ Backend/fastapi/static/brand-icon.png              |  Bin [31m80618[m -> [32m0[m bytes
+ Backend/fastapi/static/placeholder.svg             |   13 [31m-[m
+ Backend/fastapi/templates/admin_dashboard.html     |    2 [32m+[m[31m-[m
+ Backend/fastapi/templates/base.html                |   22 [32m+[m[31m-[m
+ Backend/fastapi/templates/custom_catalogs.html     |   16 [32m+[m[31m-[m
+ Backend/fastapi/templates/dashboard.html           |    2 [32m+[m[31m-[m
+ .../templates/external_addons_settings.html        |   55 [31m-[m
+ Backend/fastapi/templates/login.html               |   25 [32m+[m[31m-[m
+ Backend/fastapi/templates/media_edit.html          |  137 [32m+[m[31m-[m
+ Backend/fastapi/templates/media_management.html    |    4 [32m+[m[31m-[m
+ Backend/fastapi/templates/open_in_app.html         |   36 [31m-[m
+ Backend/fastapi/templates/settings.html            |  232 [32m++[m[31m-[m
+ Backend/fastapi/templates/stremio_configure.html   |  110 [32m+[m[31m-[m
+ .../fastapi/templates/subscriptions_manage.html    |    2 [32m+[m[31m-[m
+ Backend/fastapi/templates/tools.html               |    9 [32m+[m[31m-[m
+ Backend/fastapi/templates/two_factor_settings.html |  118 [31m--[m
+ Backend/helper/addon_http.py                       |  127 [31m--[m
+ Backend/helper/analytics.py                        |    5 [32m+[m[31m-[m
+ Backend/helper/auto_catalog.py                     |  109 [32m+[m[31m-[m
+ Backend/helper/bounded.py                          |    9 [32m+[m
+ Backend/helper/catalog_labels.py                   |   44 [31m-[m
+ Backend/helper/cf_live.py                          |   86 [32m+[m
+ Backend/helper/cf_stream.py                        |   69 [32m+[m
+ Backend/helper/custom_dl.py                        |   27 [32m+[m[31m-[m
+ Backend/helper/database.py                         |  221 [32m++[m[31m-[m
+ Backend/helper/external_addons.py                  |  249 [31m---[m
+ Backend/helper/fanart.py                           |    3 [32m+[m[31m-[m
+ Backend/helper/global_search.py                    |   18 [32m+[m[31m-[m
+ Backend/helper/manual_add.py                       |   45 [32m+[m[31m-[m
+ Backend/helper/metadata/__init__.py                |    4 [32m+[m
+ Backend/helper/metadata/common.py                  |   28 [32m+[m[31m-[m
+ Backend/helper/metadata/entry.py                   |  132 [32m+[m[31m-[m
+ Backend/helper/metadata/providers/cinemeta.py      |    2 [32m+[m[31m-[m
+ Backend/helper/metadata/providers/tmdb.py          |   52 [32m+[m[31m-[m
+ Backend/helper/metadata/providers/tvdb.py          |  141 [32m+[m[31m-[m
+ Backend/helper/metadata/resolvers.py               |  307 [32m+[m[31m---[m
+ Backend/helper/pyro.py                             |  113 [32m++[m
+ Backend/helper/scan_manager.py                     |   11 [32m+[m[31m-[m
+ Backend/helper/session_auth.py                     |   10 [32m+[m
+ Backend/helper/settings_manager.py                 |   76 [32m+[m[31m-[m
+ Backend/helper/stream_formatter.py                 | 1662 [32m+++++++++++++++++++[m
+ Backend/helper/task_manager.py                     |   13 [32m+[m[31m-[m
+ Backend/helper/utils.py                            |   18 [32m+[m
+ Backend/pyrofork/bot.py                            |    1 [32m+[m
+ Backend/pyrofork/clients.py                        |    2 [32m+[m[31m-[m
+ Backend/pyrofork/plugins/receiver.py               |   46 [32m+[m[31m-[m
+ Backend/pyrofork/plugins/start.py                  |   18 [32m+[m[31m-[m
+ Backend/pyrofork/plugins/subscription.py           |   13 [32m+[m[31m-[m
+ Dockerfile                                         |    1 [32m+[m
+ README.md                                          |  322 [32m++[m[31m--[m
+ assets/nuvio/AppleTV.webp                          |  Bin [31m0[m -> [32m6432[m bytes
+ assets/nuvio/Bollywood_backdrop.webp               |  Bin [31m0[m -> [32m344338[m bytes
+ assets/nuvio/Bollywood_cover.webp                  |  Bin [31m0[m -> [32m184382[m bytes
+ assets/nuvio/Bollywood_logo.webp                   |  Bin [31m0[m -> [32m33044[m bytes
+ assets/nuvio/Crunchyroll.webp                      |  Bin [31m0[m -> [32m8026[m bytes
+ assets/nuvio/HBOMax.webp                           |  Bin [31m0[m -> [32m9690[m bytes
+ assets/nuvio/JioHotstar.webp                       |  Bin [31m0[m -> [32m15858[m bytes
+ assets/nuvio/KDrama_backdrop.webp                  |  Bin [31m0[m -> [32m418226[m bytes
+ assets/nuvio/KDrama_cover.webp                     |  Bin [31m0[m -> [32m225478[m bytes
+ assets/nuvio/KDrama_logo.webp                      |  Bin [31m0[m -> [32m35128[m bytes
+ assets/nuvio/Netflix.webp                          |  Bin [31m0[m -> [32m4102[m bytes
+ assets/nuvio/PrimeVideo.webp                       |  Bin [31m0[m -> [32m9838[m bytes
+ assets/nuvio/RecentlyAdded_backdrop.webp           |  Bin [31m0[m -> [32m32802[m bytes
+ assets/nuvio/RecentlyAdded_cover.webp              |  Bin [31m0[m -> [32m47542[m bytes
+ assets/nuvio/RecentlyAdded_logo.webp               |  Bin [31m0[m -> [32m67900[m bytes
+ assets/nuvio/Sagas_backdrop.webp                   |  Bin [31m0[m -> [32m266586[m bytes
+ assets/nuvio/Sagas_cover.webp                      |  Bin [31m0[m -> [32m196628[m bytes
+ assets/nuvio/Sagas_logo.webp                       |  Bin [31m0[m -> [32m16006[m bytes
+ assets/nuvio/Seasonal_backdrop.webp                |  Bin [31m0[m -> [32m383008[m bytes
+ assets/nuvio/Seasonal_cover.webp                   |  Bin [31m0[m -> [32m245282[m bytes
+ assets/nuvio/Seasonal_logo.webp                    |  Bin [31m0[m -> [32m33744[m bytes
+ assets/nuvio/SonyLiv.webp                          |  Bin [31m0[m -> [32m12470[m bytes
+ assets/nuvio/SouthIndian_backdrop.webp             |  Bin [31m0[m -> [32m368898[m bytes
+ assets/nuvio/SouthIndian_cover.webp                |  Bin [31m0[m -> [32m216096[m bytes
+ assets/nuvio/SouthIndian_logo.webp                 |  Bin [31m0[m -> [32m35410[m bytes
+ assets/nuvio/Zee5.webp                             |  Bin [31m0[m -> [32m19630[m bytes
+ assets/nuvio/hulu.webp                             |  Bin [31m0[m -> [32m4732[m bytes
+ pyproject.toml                                     |    6 [32m+[m[31m-[m
+ render.yaml                                        |   18 [32m+[m
+ requirements.txt                                   |    4 [31m-[m
+ tests/test_admin_security.py                       |  290 [31m----[m
+ tests/test_external_addons.py                      |  408 [31m-----[m
+ tests/test_open_in_app.py                          |   59 [31m-[m
+ tests/test_stream_formatter.py                     |  176 [31m--[m
+ tests/test_stream_stats_security.py                |   95 [31m--[m
+ uv.lock                                            |  236 [32m+[m[31m--[m
+ 101 files changed, 4715 insertions(+), 4089 deletions(-)

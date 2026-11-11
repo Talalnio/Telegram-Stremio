@@ -1,0 +1,36 @@
+diff --cc Backend/fastapi/routes/api_routes.py
+index 6640779,00029b4..0000000
+--- a/Backend/fastapi/routes/api_routes.py
++++ b/Backend/fastapi/routes/api_routes.py
+@@@ -1401,7 -1421,9 +1422,13 @@@ async def list_custom_catalogs_api
+                      and item.get("media_type") == normalized_type
+                      for item in catalog.get("items", []) or []
+                  )
+++<<<<<<< HEAD
+ +        return {"catalogs": [{**c, "display_name": catalog_display_name(c)} for c in catalogs]}
+++=======
++         for catalog in catalogs:
++             catalog.pop("items", None)
++         return {"catalogs": catalogs}
+++>>>>>>> upstream/master
+      except Exception as e:
+          raise HTTPException(status_code=500, detail=str(e))
+  
+@@@ -1626,10 -1648,10 +1653,17 @@@ async def update_auto_catalog_settings_
+  
+  
+  _DEFAULT_CATALOG_ENTRIES = [
+++<<<<<<< HEAD
+ +    {"id": "latest_movies", "name": DEFAULT_CATALOG_LABELS["latest_movies"], "group": "Default Movies", "type": "movie"},
+ +    {"id": "top_movies", "name": DEFAULT_CATALOG_LABELS["top_movies"], "group": "Default Movies", "type": "movie"},
+ +    {"id": "latest_series", "name": DEFAULT_CATALOG_LABELS["latest_series"], "group": "Default TV", "type": "series"},
+ +    {"id": "top_series", "name": DEFAULT_CATALOG_LABELS["top_series"], "group": "Default TV", "type": "series"},
+++=======
++     {"id": "latest_movies", "name": "Recently Added Movies", "group": "Default Movies", "type": "movie"},
++     {"id": "top_movies", "name": "Popular Movies", "group": "Default Movies", "type": "movie"},
++     {"id": "latest_series", "name": "Recently Added Series", "group": "Default TV", "type": "series"},
++     {"id": "top_series", "name": "Popular Series", "group": "Default TV", "type": "series"},
+++>>>>>>> upstream/master
+  ]
+  
+  
