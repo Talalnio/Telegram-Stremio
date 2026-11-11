@@ -8,6 +8,7 @@ import httpx
 
 from Backend.helper.metadata import tmdb_api_key
 from Backend.helper.settings_manager import SettingsManager
+from Backend.helper.bounded import BoundedDict
 from Backend.logger import LOGGER
 
 _MOVIE_URL = "https://webservice.fanart.tv/v3/movies/{id}"
@@ -37,7 +38,7 @@ _CACHE_TTL = 6 * 3600
 _ERROR_TTL = 300
 _CACHE_MAX = 4096
 _cache: dict = {}
-_tvdb_cache: dict = {}
+_tvdb_cache = BoundedDict(2000)
 _inflight: dict = {}
 
 _client: Optional[httpx.AsyncClient] = None

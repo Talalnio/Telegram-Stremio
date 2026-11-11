@@ -2,6 +2,7 @@ FROM ghcr.io/astral-sh/uv:debian-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV MALLOC_ARENA_MAX=2
 ENV LANG=en_US.UTF-8
 ENV PATH="/app/.venv/bin:$PATH"
 

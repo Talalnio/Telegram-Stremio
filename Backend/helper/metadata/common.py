@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from rapidfuzz import fuzz
 
+from Backend.helper.bounded import BoundedDict
 from Backend.logger import LOGGER
 
 # Match thresholds
@@ -28,13 +29,13 @@ GRADIENT_COVER_BASE = "https://gradient-cover-api.vercel.app"
 API_SEMAPHORE = asyncio.Semaphore(12)
 
 # Shared caches (provider modules may also keep their own)
-IMDB_CACHE: dict = {}
-TMDB_SEARCH_CACHE: dict = {}
-TMDB_DETAILS_CACHE: dict = {}
-EPISODE_CACHE: dict = {}
-ALT_TITLES_CACHE: dict = {}
-TVDB_CACHE: dict = {}
-KITSU_CACHE: dict = {}
+IMDB_CACHE = BoundedDict(300)
+TMDB_SEARCH_CACHE = BoundedDict(300)
+TMDB_DETAILS_CACHE = BoundedDict(300)
+EPISODE_CACHE = BoundedDict(500)
+ALT_TITLES_CACHE = BoundedDict(300)
+TVDB_CACHE = BoundedDict(300)
+KITSU_CACHE = BoundedDict(300)
 
 _INFLIGHT: Dict[tuple, asyncio.Future] = {}
 
@@ -271,6 +272,19 @@ def format_imdb_images(imdb_id: str) -> dict:
         "backdrop": f"https://images.metahub.space/background/medium/{imdb_id}/img",
         "logo": f"https://images.metahub.space/logo/medium/{imdb_id}/img",
     }
+
+
+ID_REFS = re.compile(r"(?:https?://)?(?:www\.|m\.)?(?:imdb\.com/title/tt\d+|themoviedb\.org/(?:movie|tv)/\d+)\S*|\btt\d{7,10}\b", re.I)
+
+
+def has_raw_ref(text) -> bool:
+    return bool(ID_REFS.search(text or ""))
+
+
+#----- Caption plus the URLs hidden behind its text links (IMDB deeplinks)
+def caption_with_links(message) -> str:
+    urls = [e.url for e in (getattr(message, "caption_entities", None) or []) if getattr(e, "url", None)]
+    return "\n".join([getattr(message, "caption", None) or "", *urls])
 
 
 def extract_default_id(text: str) -> str | None:

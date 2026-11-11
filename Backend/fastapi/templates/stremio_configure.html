@@ -137,6 +137,16 @@ h1 { font-size: 1.15rem; font-weight: 700; color: var(--text); margin-bottom: 6p
 button { font-family: inherit; }
 .btn-copy:hover { background: var(--surface-2); color: var(--text); border-color: var(--hairline-strong); }
 </style>
+<script>
+/* Clipboard API needs HTTPS; fall back to execCommand on plain-HTTP LAN access */
+if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value: { writeText: t => new Promise((ok, fail) => {
+    const a = document.createElement('textarea');
+    a.value = t; a.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(a); a.select();
+    const done = document.execCommand('copy'); a.remove();
+    done ? ok() : fail(new Error('Copy failed'));
+}) } });
+</script>
 </head>
 <body>
 <div class="wrap">

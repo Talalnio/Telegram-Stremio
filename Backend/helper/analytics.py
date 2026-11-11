@@ -4,12 +4,13 @@ from datetime import datetime, timedelta
 import httpx
 
 from Backend import db
+from Backend.helper.bounded import BoundedDict
 from Backend.helper.custom_dl import ACTIVE_STREAMS
 from Backend.logger import LOGGER
 
-_IP_CACHE = {}
+_IP_CACHE = BoundedDict(2000)
 _IP_TTL = 6 * 3600
-_LAST_FULL = {}
+_LAST_FULL = BoundedDict(2000)
 _FULL_INTERVAL = 60
 ONLINE_WINDOW = 120
 

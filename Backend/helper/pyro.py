@@ -12,6 +12,7 @@ from Backend.pyrofork.bot import StreamBot
 import re
 from pyrogram.types import BotCommand
 from pyrogram import enums
+import httpx
 
 
 _EMOJI_PATTERN = re.compile(
@@ -60,6 +61,117 @@ def is_media(message):
     )
 
 
+def get_video_cover(message):
+    media = getattr(message, "video", None) or getattr(message, "document", None)
+    if not media:
+        return None
+    return getattr(media, "cover", None) or getattr(media, "video_cover", None) or getattr(message, "video_cover", None)
+
+
+def message_has_thumb(message) -> bool:
+    media = getattr(message, "video", None) or getattr(message, "document", None)
+    if not media:
+        return False
+    if get_video_cover(message):
+        return True
+    return bool(getattr(media, "thumbs", None))
+
+
+def get_thumb_download_target(message):
+    cover = get_video_cover(message)
+    if cover is not None:
+        return cover
+    media = getattr(message, "video", None) or getattr(message, "document", None)
+    thumbs = getattr(media, "thumbs", None) if media else None
+    if thumbs:
+        return thumbs[-1]
+    return None
+
+
+_IMGUR_CLIENT_ID = "546c25a59c58ad7"
+
+
+async def upload_bytes_to_host(data: bytes, filename: str = "thumb.jpg") -> Optional[str]:
+    if not data:
+        return None
+    timeout = httpx.Timeout(25.0, connect=10.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as http:
+        try:
+            resp = await http.post(
+                "https://api.imgur.com/3/image",
+                headers={**headers, "Authorization": f"Client-ID {_IMGUR_CLIENT_ID}"},
+                files={"image": (filename, data, "image/jpeg")},
+            )
+            if resp.status_code == 200:
+                link = (((resp.json() or {}).get("data") or {}).get("link") or "").strip()
+                if link.startswith("http"):
+                    return link
+        except Exception:
+            pass
+        try:
+            resp = await http.post(
+                "https://tmpfiles.org/api/v1/upload",
+                files={"file": (filename, data, "image/jpeg")},
+            )
+            if resp.status_code == 200:
+                url = ((((resp.json() or {}).get("data") or {}).get("url")) or "").strip()
+                if url.startswith("http"):
+                    if "tmpfiles.org/" in url and "/dl/" not in url:
+                        url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
+                    return url
+        except Exception:
+            pass
+    return None
+
+
+async def upload_message_thumb_to_host(client, message) -> Optional[str]:
+    target = get_thumb_download_target(message)
+    if not target or not client:
+        return None
+    try:
+        file_id = getattr(target, "file_id", None) or target
+        buf = await client.download_media(file_id, in_memory=True)
+        data = buf.getvalue() if hasattr(buf, "getvalue") else bytes(buf)
+        return await upload_bytes_to_host(data)
+    except Exception as e:
+        LOGGER.warning(f"[THUMB] host upload failed: {e}")
+        return None
+
+
+async def resolve_video_thumb_url(client, message, encoded: str) -> str:
+    if not message_has_thumb(message):
+        return ""
+    fallback = f"/thumb/{encoded}"
+    if client:
+        try:
+            url = await upload_message_thumb_to_host(client, message)
+            if url:
+                return url
+        except Exception as e:
+            LOGGER.warning(f"[THUMB] hybrid resolve failed: {e}")
+    return fallback
+
+
+async def apply_video_thumb_to_metadata(metadata_info: dict, message, encoded: str, client=None) -> None:
+    needs = False
+    if metadata_info.get("media_type") == "tv":
+        needs = not metadata_info.get("episode_backdrop")
+    else:
+        needs = not metadata_info.get("backdrop")
+    if not needs:
+        return
+    thumb_url = await resolve_video_thumb_url(client, message, encoded)
+    if not thumb_url:
+        return
+    if metadata_info.get("media_type") == "tv":
+        metadata_info["episode_backdrop"] = thumb_url
+    else:
+        metadata_info["backdrop"] = thumb_url
+
+
 async def get_file_ids(client: Client, chat_id: int, message_id: int) -> Optional[FileId]:
     try:
         message = await client.get_messages(chat_id, message_id)
@@ -101,6 +213,7 @@ def remove_urls(text):
         return ""
 
     url_pattern = r'\b(?:(?:https?|ftp):\/\/|www\.)[^\s/$.?#].[^\s]*'
+    text = re.sub(r'\n\s*(?:IMDB|TMDB)\s*$', '', text, flags=re.I)
     text_without_urls = re.sub(url_pattern, '', text)
     cleaned_text = re.sub(r'\s+', ' ', text_without_urls).strip()
 

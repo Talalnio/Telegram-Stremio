@@ -54,7 +54,7 @@ async def stop_client(client_id: int) -> None:
     work_loads.pop(client_id, None)
     client_dc_map.pop(client_id, None)
     client_tokens.pop(client_id, None)
-    _streamer_by_client.pop(client_id, None)
+    _streamer_by_client.pop(client, None)
 
     if client:
         try:

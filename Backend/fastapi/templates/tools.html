@@ -340,7 +340,7 @@
 
         <div class="flex items-center gap-2 flex-wrap mb-3">
             <button class="btn btn-ghost" type="button" id="ba-scan-btn" onclick="loadBotAdmin()">
-                <i class="fa-solid fa-arrows-rotate"></i> Re-scan
+                <i class="fa-solid fa-arrows-rotate"></i> Scan
             </button>
             <span class="hint" style="display:flex;align-items:center;gap:0.9rem;flex-wrap:wrap">
                 <span><span class="ba-ok">✓</span> Admin</span>
@@ -350,7 +350,7 @@
             </span>
         </div>
 
-        <div id="ba-loading" class="hint"><i class="fa-solid fa-spinner fa-spin"></i> Scanning channels &amp; bots…</div>
+        <div id="ba-loading" class="hint" style="display:none"><i class="fa-solid fa-spinner fa-spin"></i> Scanning channels &amp; bots…</div>
         <div id="ba-error" class="hint" style="color:#ef4444;display:none"></div>
 
         <div id="ba-body" style="display:none">
@@ -1452,7 +1452,6 @@ pollDup().then(() => {
     const pill = document.getElementById('dup-status-pill');
     if (pill.classList.contains('status-running')) startDupPolling();
 });
-if (document.getElementById('ba-body')) loadBotAdmin();
 </script>
 
 {% endblock %}

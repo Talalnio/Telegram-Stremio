@@ -1,6 +1,5 @@
 from Backend.helper.catalog_labels import DEFAULT_CATALOG_LABELS, catalog_display_name
 import asyncio
-import asyncio
 import json
 import os
 import random
@@ -31,7 +30,8 @@ from Backend.helper.backup import export_config, import_config
 from Backend.helper.custom_dl import ByteStreamer, _speed_test_single_client, run_speed_test
 from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.health import run_health_checks
-from Backend.helper.manual_add import resolve_telegram_message, stamp_caption_by_ref
+from Backend.helper.manual_add import resolve_telegram_message, retag_media, stamp_caption_by_ref
+from Backend.helper.pyro import resolve_video_thumb_url
 from Backend.helper.requests_manager import (
     delete_request,
     list_requests,
@@ -41,6 +41,7 @@ from Backend.helper.requests_manager import (
     submit_request,
 )
 from Backend.helper.metadata import (
+    build_id_link,
     extract_default_id,
     fetch_selected_movie_metadata,
     fetch_selected_tv_metadata,
@@ -145,6 +146,12 @@ def _resolve_covers(items) -> None:
                 item[key] = resolve_cover_url(item[key])
 
 
+_LIST_PROJECTION = {k: 0 for k in (
+    "description", "cast", "telegram.name", "seasons.episodes.title", "seasons.episodes.overview",
+    "seasons.episodes.episode_backdrop", "seasons.episodes.telegram.name",
+)}
+
+
 #----- Media management
 async def list_media_api(
     media_type: str = Query("movie", regex="^(movie|tv)$"),
@@ -158,23 +165,18 @@ async def list_media_api(
         #----- Custom (manually added) titles carry a negative synthetic tmdb_id
         extra_filter = {"tmdb_id": {"$lt": 0}} if custom else None
         if search:
-            result = await db.search_documents(search, page, page_size)
-            filtered_results = [
-                item for item in result['results']
-                if item.get('media_type') == media_type and (not custom or int(item.get('tmdb_id') or 0) < 0)
-            ]
-            total_filtered = len(filtered_results)
-            start_index = (page - 1) * page_size
+            result = await db.search_documents(search, page, page_size, extra_filter=extra_filter, media_type=media_type)
+            total = result["total_count"]
             resp = {
-                "total_count": total_filtered,
+                "total_count": total,
                 "current_page": page,
-                "total_pages": (total_filtered + page_size - 1) // page_size,
-                key: filtered_results[start_index:start_index + page_size],
+                "total_pages": (total + page_size - 1) // page_size,
+                key: result["results"],
             }
         elif media_type == "movie":
-            resp = await db.sort_movies([], page, page_size, extra_filter=extra_filter)
+            resp = await db.sort_movies([], page, page_size, extra_filter=extra_filter, projection=_LIST_PROJECTION)
         else:
-            resp = await db.sort_tv_shows([], page, page_size, extra_filter=extra_filter)
+            resp = await db.sort_tv_shows([], page, page_size, extra_filter=extra_filter, projection=_LIST_PROJECTION)
         _resolve_covers(resp.get(key))
         return resp
     except Exception as e:
@@ -987,6 +989,16 @@ async def search_media_rescan_api(media_type: str, query: str, year: int | None 
     return {"results": results}
 
 
+async def tag_media_api(tmdb_id: str | int, db_index: int, media_type: str):
+    doc = await db.get_document(media_type, _require_tmdb_id(tmdb_id), db_index)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Media not found.")
+    if not build_id_link(doc.get("imdb_id"), doc.get("tmdb_id"), media_type):
+        raise HTTPException(status_code=400, detail="This title has no IMDb or TMDB id to tag with.")
+    asyncio.create_task(retag_media(_scan_client(), media_type, doc))
+    return {"status": "success", "message": "Tagging files in the background."}
+
+
 async def apply_media_rescan_api(request: Request, tmdb_id: str | int, db_index: int, media_type: str):
     tmdb_id = _require_tmdb_id(tmdb_id)
     body = await request.json()
@@ -1018,6 +1030,7 @@ async def apply_media_rescan_api(request: Request, tmdb_id: str | int, db_index:
 
     if not updated_doc:
         raise HTTPException(status_code=500, detail="Failed to replace media metadata.")
+    asyncio.create_task(retag_media(_scan_client(), media_type, updated_doc))
 
     return {
         "success": True,
@@ -1281,11 +1294,15 @@ async def manual_add_media_api(payload: dict) -> dict:
         base["imdb_id"] = f"tg{abs(int(base['tmdb_id']))}"
     _fill_placeholder_metadata(base)
 
-    #----- Store the file thumbnail as a base-relative path so it survives base_url changes
     thumb_url = ""
     if primary.get("has_thumb"):
         thumb_enc = await encode_string({"chat_id": int(primary["chat_id"]), "msg_id": int(primary["msg_id"])})
-        thumb_url = f"/thumb/{thumb_enc}"
+        try:
+            chat_ref = int(f"-100{str(primary['chat_id']).replace('-100', '')}")
+            msg = await client.get_messages(chat_ref, int(primary["msg_id"]))
+            thumb_url = await resolve_video_thumb_url(client, msg, thumb_enc)
+        except Exception:
+            thumb_url = f"/thumb/{thumb_enc}"
 
     #----- Split parts share one quality entry via a common group key
     group_key = f"manual:{primary['chat_id']}:{quality}:{secrets.token_hex(6)}" if is_split else None
@@ -1305,6 +1322,8 @@ async def manual_add_media_api(payload: dict) -> dict:
             "episode_overview": payload.get("episode_overview") or "",
             "episode_released": payload.get("episode_released") or "",
         }
+    elif thumb_url and not base.get("backdrop"):
+        base["backdrop"] = thumb_url
 
     for index, part in enumerate(resolved_parts, start=1):
         p_channel = int(part["chat_id"])
@@ -1391,8 +1410,9 @@ async def list_custom_catalogs_api(
     media_type: str | None = None,
 ):
     try:
-        catalogs = await db.get_custom_catalogs()
-        if tmdb_id is not None and db_index is not None and media_type:
+        check_current = tmdb_id is not None and db_index is not None and bool(media_type)
+        catalogs = await db.get_custom_catalogs(item_fields=("tmdb_id", "db_index", "media_type") if check_current else ())
+        if check_current:
             normalized_type = _normalize_media_type(media_type)
             for catalog in catalogs:
                 catalog["contains_current"] = any(
@@ -1401,6 +1421,8 @@ async def list_custom_catalogs_api(
                     and item.get("media_type") == normalized_type
                     for item in catalog.get("items", []) or []
                 )
+        for catalog in catalogs:
+            catalog.pop("items", None)
         return {"catalogs": [{**c, "display_name": catalog_display_name(c)} for c in catalogs]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1408,7 +1430,7 @@ async def list_custom_catalogs_api(
 
 async def list_manual_add_catalogs_api():
     try:
-        catalogs = await db.get_custom_catalogs()
+        catalogs = await db.get_custom_catalogs(slim=True)
         filtered = [c for c in catalogs if not c.get("auto")]
         filtered.sort(key=lambda c: (0 if c.get("exclusive") else 1, (c.get("name") or "").lower()))
         return {"catalogs": [
@@ -1529,8 +1551,8 @@ async def search_catalog_media_api(
         return {"results": [], "total_count": 0}
 
     try:
-        result = await db.search_documents(query, page, page_size)
         normalized_type = _normalize_media_type(media_type)
+        result = await db.search_documents(query, page, page_size, media_type=normalized_type)
         filtered = [item for item in result.get("results", []) if item.get("media_type") == normalized_type]
         return {"results": filtered, "total_count": len(filtered)}
     except Exception as e:
@@ -1635,7 +1657,7 @@ _DEFAULT_CATALOG_ENTRIES = [
 
 async def get_catalog_order_api():
     try:
-        catalogs = await db.get_custom_catalogs()
+        catalogs = await db.get_custom_catalogs(slim=True)
         entries = [dict(e) for e in _DEFAULT_CATALOG_ENTRIES]
         for c in catalogs:
             items = c.get("items") or []
@@ -1778,7 +1800,7 @@ async def update_settings_api(payload: dict) -> dict:
         del payload["session_secret"]
 
     #----- Type coercion and validation
-    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
+    bool_keys = {"replace_mode", "duplicate_protection", "hide_catalog", "subscription", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "announce_new_content", "delete_on_metadata_fail", "better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled", "fanart_shuffle", "fanart_low_res_poster"}
     for key in bool_keys:
         if key in payload:
             payload[key] = bool(payload[key])
@@ -1795,6 +1817,25 @@ async def update_settings_api(payload: dict) -> dict:
         if payload["better_poster"] and "{imdb_id}" not in payload["better_poster"]:
             raise HTTPException(status_code=400, detail="wrong betterposter url")
 
+    if "spatial_poster" in payload:
+        payload["spatial_poster"] = str(payload["spatial_poster"] or "").strip()
+        if payload["spatial_poster"] and "{imdb_id}" not in payload["spatial_poster"]:
+            raise HTTPException(status_code=400, detail="SpatialPosters URL must contain {imdb_id}")
+
+    if payload.get("spatial_poster_enabled") and not payload.get("spatial_poster"):
+        raise HTTPException(status_code=400, detail="SpatialPosters URL is required")
+
+    if "stream_formatter" in payload:
+        from Backend.helper.stream_formatter import PRESETS
+        if payload["stream_formatter"] not in ("default", "custom", *PRESETS):
+            raise HTTPException(status_code=400, detail="Unknown stream formatter")
+    for key in ("formatter_name", "formatter_description"):
+        if key in payload:
+            payload[key] = str(payload[key] or "")[:20000]
+
+    if "default_streaming" in payload and payload["default_streaming"] not in ("bots", "userbot"):
+        raise HTTPException(status_code=400, detail="default_streaming must be 'bots' or 'userbot'")
+
     if "rpdb_api_key" in payload:
         payload["rpdb_api_key"] = str(payload["rpdb_api_key"] or "").strip()
 
@@ -1807,7 +1848,7 @@ async def update_settings_api(payload: dict) -> dict:
         except (ValueError, TypeError):
             payload["fanart_shuffle_interval"] = 5
 
-    if len([k for k in ("better_poster_enabled", "rpdb_enabled", "fanart_enabled") if payload.get(k)]) > 1:
+    if len([k for k in ("better_poster_enabled", "rpdb_enabled", "spatial_poster_enabled", "fanart_enabled") if payload.get(k)]) > 1:
         raise HTTPException(status_code=400, detail="Enable only one poster provider at a time")
 
     if payload.get("fanart_enabled") and not str(payload.get("fanart_api_key") or "").strip():
@@ -1926,6 +1967,7 @@ async def update_settings_api(payload: dict) -> dict:
     #----- Strip whitespace from string fields
     for key in ("tmdb_api", "base_url", "upstream_repo", "upstream_branch",
                 "admin_username", "admin_password", "session_secret", "http_proxy_url",
+                "cf_stream_url", "cf_stream_secret", "cf_stream_mode",
                 "mediaflow_password", "payment_instructions", "payment_qr_url",
                 "announcement_channel", "skip_channel"):
         if key in payload and isinstance(payload[key], str):
@@ -1963,8 +2005,8 @@ def _scan_client():
 async def get_tools_channels_api() -> dict:
     channels = list(SettingsManager.current().auth_channels)
     client = _scan_client()
-    result = []
-    for ch in channels:
+
+    async def _resolve(ch):
         name = str(ch)
         try:
             if client is not None:
@@ -1972,8 +2014,9 @@ async def get_tools_channels_api() -> dict:
                 name = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(ch)
         except Exception as e:
             LOGGER.warning(f"[Tools] Could not resolve channel {ch}: {e}")
-        result.append({"id": str(ch), "name": name})
-    return {"status": "success", "data": result}
+        return {"id": str(ch), "name": name}
+
+    return {"status": "success", "data": await asyncio.gather(*(_resolve(ch) for ch in channels))}
 
 
 #----- ── Manual upload session (web replacement for the /set bot command) ──

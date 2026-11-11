@@ -475,6 +475,16 @@ tailwind.config = {
     }
 }
 </script>
+<script>
+/* Clipboard API needs HTTPS; fall back to execCommand on plain-HTTP LAN access */
+if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', { value: { writeText: t => new Promise((ok, fail) => {
+    const a = document.createElement('textarea');
+    a.value = t; a.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(a); a.select();
+    const done = document.execCommand('copy'); a.remove();
+    done ? ok() : fail(new Error('Copy failed'));
+}) } });
+</script>
 </head>
 
 <body class="pt-24 pb-12 antialiased">
@@ -603,8 +613,8 @@ tailwind.config = {
             <a href="/admin/access" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-shield"></i> Tokens</a>
             <a href="/admin/requests" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-inbox"></i> Requests</a>
             <a href="/admin/tools" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-screwdriver-wrench"></i> Tools</a>
-            <!-- ↓ NEW -->
             <a href="/admin/settings" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-gear"></i> Settings</a>
+            <a href="https://donate.weebzonex.workers.dev" target="_blank" rel="noopener" class="px-4 py-3 rounded-xl hover:bg-primary hover:text-background transition flex items-center gap-3 font-semibold"><i class="fa-solid fa-heart text-red-500"></i> Donate</a>
         </div>
     </div>
 </nav>

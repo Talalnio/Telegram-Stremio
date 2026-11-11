@@ -426,25 +426,25 @@ def _translation_by_lang(doc: dict, lang_code: str) -> tuple[Optional[str], Opti
     """
     tr = doc.get("translations") or {}
     lang_code = (lang_code or "eng").strip().lower()
-    fallback_codes = [lang_code]
-    if lang_code != "eng":
-        fallback_codes.extend(["eng", "en"])
+    fallback_codes = list(dict.fromkeys([lang_code, "eng", "en"]))
     name = None
     overview = None
 
     for code in fallback_codes:
         for item in tr.get("nameTranslations") or []:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("isAlias"):
                 continue
             if str(item.get("language") or "").lower() == code:
-                name = item.get("name") or name
-                break
+                name = name or item.get("name")
+                if item.get("isPrimary") and item.get("name"):
+                    name = item["name"]
+                    break
         if name:
             break
 
     for code in fallback_codes:
         for item in tr.get("overviewTranslations") or []:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("isAlias"):
                 continue
             if str(item.get("language") or "").lower() == code:
                 overview = item.get("overview") or overview

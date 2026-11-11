@@ -1,6 +1,7 @@
 """Main metadata entry point and /set candidate search."""
 from __future__ import annotations
 
+import html
 import traceback
 from typing import Optional
 
@@ -10,6 +11,7 @@ from Backend.helper.metadata.common import (
     ensure_media_ids,
     COMBINED_EPISODE_BASE,
     COMBINED_SEASON,
+    ID_REFS,
     extract_default_id,
     format_imdb_images,
     format_tmdb_image,
@@ -268,6 +270,9 @@ async def _resolve_id_candidate(default_id, media_type: str) -> dict | None:
             detail = await cinemeta.cached_detail(imdb_id, imdb_type)
         except Exception as e:
             LOGGER.warning(f"IMDb id candidate resolve failed for '{imdb_id}': {e}")
+        else:
+            if not detail:
+                return None
         images = format_imdb_images(imdb_id)
         if detail and detail.get("title"):
             return _candidate_entry(
@@ -393,10 +398,10 @@ def caption_with_id(caption: str, metadata_info: dict) -> str | None:
     )
     if not link:
         return None
-    base = (caption or "").strip()
-    if extract_default_id(base):
-        return None
-    return f"{base}\n{link}" if base else link
+    lines = (line.strip() for line in ID_REFS.sub("", caption or "").split("\n"))
+    base = html.escape("\n".join(l for l in lines if l and l.upper() not in ("IMDB", "TMDB")), quote=False)
+    tag = f'<a href="{link}">{"IMDB" if "imdb.com" in link else "TMDB"}</a>'
+    return f"{base}\n{tag}" if base else tag
 
 
 def _to_selection_payload(data: dict, media_type: str) -> dict:

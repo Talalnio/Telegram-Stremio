@@ -8,8 +8,9 @@ from pyrogram.errors import FloodWait, ChannelPrivate, ChatAdminRequired
 
 from Backend.logger import LOGGER
 from Backend.helper.encrypt import encode_string, decode_string
-from Backend.helper.metadata import metadata, extract_default_id
-from Backend.helper.pyro import clean_filename, finalize_media_name, get_readable_file_size
+from Backend.helper.manual_add import stamp_caption_with_id
+from Backend.helper.metadata import caption_with_links, extract_default_id, has_raw_ref, metadata
+from Backend.helper.pyro import apply_video_thumb_to_metadata, clean_filename, finalize_media_name, get_readable_file_size
 from Backend.helper.skip_channel import is_skip_channel, route_to_skip_channel
 from Backend.helper.split_files import parse_split_info
 from Backend.helper.subtitles import ingest_subtitle, is_subtitle_file
@@ -478,7 +479,7 @@ class ScanManager:
         try:
             metadata_info = await metadata(
                 clean_filename(title), channel_int, msg_id,
-                override_id=extract_default_id(message.caption or ""),
+                override_id=extract_default_id(caption_with_links(message)),
             )
         except Exception as e:
             LOGGER.warning(f"[ScanManager] Metadata exception for msg {msg_id}: {e}")
@@ -493,6 +494,8 @@ class ScanManager:
             return
 
         title_clean = finalize_media_name(title, bool(metadata_info.get('group_key')))
+        encoded = metadata_info.get("encoded_string") or await encode_string({"chat_id": channel_int, "msg_id": msg_id})
+        await apply_video_thumb_to_metadata(metadata_info, message, encoded, client)
 
         insert_status: dict = {}
         try:
@@ -511,6 +514,8 @@ class ScanManager:
                     s["counters"]["skipped_dup"] += 1
                 else:
                     s["counters"]["indexed"] += 1
+                    if has_raw_ref(message.caption):
+                        await stamp_caption_with_id(message, metadata_info)
             else:
                 s["counters"]["skipped_meta"] += 1
         except Exception as e:

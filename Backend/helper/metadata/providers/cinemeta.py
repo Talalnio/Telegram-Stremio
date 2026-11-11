@@ -215,7 +215,7 @@ async def cached_detail(imdb_id: str, media_type: str):
     async def _produce():
         return await get_detail(imdb_id=imdb_id, media_type=media_type)
 
-    return await cached_call(IMDB_CACHE, imdb_id, "imdb_detail", _produce)
+    return await cached_call(IMDB_CACHE, f"{_cinemeta_type(media_type)}:{imdb_id}", "imdb_detail", _produce)
 
 
 async def cached_season(imdb_id: str, season, episode):

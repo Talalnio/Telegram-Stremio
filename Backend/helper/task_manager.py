@@ -13,6 +13,7 @@ from pyrogram.errors import (
     SessionRevoked,
     RPCError,
 )
+from pyrogram.enums import ParseMode
 
 from Backend.logger import LOGGER
 import Backend.pyrofork.bot as botmod
@@ -45,21 +46,21 @@ async def _resolve_peer(client, chat_id) -> bool:
 
 async def edit_message(chat_id: int, msg_id: int, new_caption: str):
     try:
-        await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+        await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
         await sleep(2)
         return
     except FloodWait as e:
         LOGGER.warning(f"FloodWait for {e.value}s while editing message {msg_id} in {chat_id}")
         await sleep(e.value)
         try:
-            await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+            await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
             return
         except Exception as e2:
             LOGGER.error(f"Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
     except PeerIdInvalid as e:
         if await _resolve_peer(StreamBot, chat_id):
             try:
-                await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+                await StreamBot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
                 return
             except Exception as e2:
                 LOGGER.error(f"Retry after peer resolve failed while editing {msg_id} in {chat_id}: {e2}")
@@ -81,19 +82,19 @@ async def edit_message(chat_id: int, msg_id: int, new_caption: str):
 async def _userbot_edit(chat_id: int, msg_id: int, new_caption: str):
     global _userbot_session_dead
     try:
-        await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+        await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
         await sleep(2)
     except FloodWait as e:
         LOGGER.warning(f"[USERBOT] FloodWait detected: sleeping {e.value}s (edit {msg_id} in {chat_id})")
         await sleep(e.value)
         try:
-            await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+            await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
         except Exception as e2:
             LOGGER.error(f"[USERBOT] Retry after FloodWait failed while editing {msg_id} in {chat_id}: {e2}")
     except PeerIdInvalid as e:
         if await _resolve_peer(botmod.Userbot, chat_id):
             try:
-                await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption)
+                await botmod.Userbot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=new_caption, parse_mode=ParseMode.HTML)
                 return
             except Exception as e2:
                 LOGGER.error(f"[USERBOT] Retry after peer resolve failed while editing {msg_id} in {chat_id}: {e2}")

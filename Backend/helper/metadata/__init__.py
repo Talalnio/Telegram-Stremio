@@ -17,8 +17,10 @@ Identical concurrent lookups share one in-flight Future (no stampedes).
 from Backend.helper.metadata.common import (
     COMBINED_EPISODE_BASE,
     COMBINED_SEASON,
+    caption_with_links,
     extract_default_id,
     format_tmdb_image,
+    has_raw_ref,
     gradient_cover_path,
     resolve_cover_url,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "analyze_metadata_failure",
     "build_id_link",
     "caption_with_id",
+    "caption_with_links",
     "extract_default_id",
     "fetch_movie_metadata",
     "fetch_selected_movie_metadata",
@@ -54,6 +57,7 @@ __all__ = [
     "format_tmdb_image",
     "get_tmdb_client",
     "gradient_cover_path",
+    "has_raw_ref",
     "metadata",
     "parse_media_name",
     "resolve_cover_url",

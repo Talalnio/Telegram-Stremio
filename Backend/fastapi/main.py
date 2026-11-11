@@ -103,6 +103,7 @@ from Backend.fastapi.routes.api_routes import (
     search_catalog_media_api,
     set_media_visibility_api,
     search_media_rescan_api,
+    tag_media_api,
     speed_test_api,
     speed_test_stream_api,
     start_dbcheck_api,
@@ -118,6 +119,7 @@ from Backend.fastapi.routes.api_routes import (
 )
 from Backend.fastapi.routes.stream_routes import decay_client_failures
 from Backend.fastapi.routes.stream_routes import router as stream_router
+from Backend.fastapi.routes.cf_routes import router as cf_router
 from Backend.fastapi.routes.stremio_routes import _abs_media_url, router as stremio_router
 from Backend.fastapi.routes.webdav_routes import router as webdav_router
 from Backend.fastapi.routes.template_routes import (
@@ -173,6 +175,7 @@ async def _startup():
 
 #----- Streaming and Stremio routers
 app.include_router(stream_router)
+app.include_router(cf_router)
 app.include_router(stremio_router)
 app.include_router(external_addon_router)
 app.include_router(webdav_router)
@@ -551,6 +554,10 @@ async def apply_media_rescan(
 ):
     return await apply_media_rescan_api(request, tmdb_id, db_index, media_type)
 
+@app.post("/api/media/tag")
+async def tag_media(tmdb_id: int, db_index: int, media_type: str, _: bool = Depends(require_auth)):
+    return await tag_media_api(tmdb_id, db_index, media_type)
+
 
 #----- Manual add (custom movie/tv/season/episode/stream)
 @app.post("/api/media/resolve-telegram")
@@ -701,6 +708,15 @@ async def get_settings(_: bool = Depends(require_auth)):
 @app.put("/api/admin/settings")
 async def update_settings(payload: dict, _: bool = Depends(require_auth)):
     return await update_settings_api(payload)
+
+
+@app.post("/api/admin/settings/formatter-preview")
+async def formatter_preview(payload: dict, _: bool = Depends(require_auth)):
+    from Backend.helper.stream_formatter import PRESETS, build_parse_value, render
+    tpl = PRESETS.get(payload.get("preset")) or {"name": str(payload.get("name") or ""), "description": str(payload.get("description") or "")}
+    pv = build_parse_value(str(payload.get("filename") or "video.mkv"), 2_500_000_000, channel="My Channel",
+                           meta={"queryType": "movie", "type": "movie"})
+    return {"name": render(tpl["name"], pv), "description": render(tpl["description"], pv)}
 
 
 #----- Telegram user session login (replaces manual USER_SESSION_STRING)

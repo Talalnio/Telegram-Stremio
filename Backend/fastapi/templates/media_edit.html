@@ -45,6 +45,11 @@
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
   }
 
+  [data-sub-row] .sub-url { min-width: 0; }
+  @media (min-width: 640px) {
+    [data-sub-row] .sub-lang { width: 11rem; flex: none; }
+  }
+
   .field-input::placeholder,
   .field-textarea::placeholder {
     color: color-mix(in srgb, var(--text-sec) 85%, transparent);
@@ -231,6 +236,22 @@
     .speed-modal-body {
       max-height: calc(100dvh - 9.5rem);
     }
+    .st-table thead { display: none; }
+    .st-table, .st-table tbody, .st-table td { display: block; width: 100%; }
+    .st-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem 0.9rem; padding: 0.85rem 1rem; }
+    .st-table td { padding: 0 !important; font-size: 0.8rem; }
+    .st-table td:first-child { grid-column: 1 / -1; font-size: 0.9rem; }
+    .st-table td[data-label]::before {
+      content: attr(data-label);
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.55;
+      margin-bottom: 0.15rem;
+    }
+    .st-actions .btn-ui { flex: 1; }
   }
 
   .edit-tabs {
@@ -335,7 +356,7 @@
                         <img src="{{ cover_url(media_details.poster) or '/static/placeholder.svg' }}"
                              alt="{{ media_details.title }}"
                              class="w-36 sm:w-40 md:w-48 h-54 sm:h-60 md:h-72 object-cover rounded-2xl shadow-2xl border border-hairline-strong"
-                             onerror="this.onerror=null; this.src='https://via.placeholder.com/300x450/e5e7eb/9ca3af?text=No+Image'">
+                             onerror="this.onerror=null; this.src='/static/placeholder.svg'">
                     </div>
 
                     <div class="flex-1 min-w-0 text-center md:text-left">
@@ -399,7 +420,10 @@
                     Use this only when the auto-detected {{ media_type }} is mismatched. Existing Telegram files will stay safe.
                 </p>
             </div>
-            <span class="pill">IMDb / TMDb re-match</span>
+            <div class="flex items-center gap-2">
+                <span class="pill">IMDb / TMDb re-match</span>
+                <button type="button" class="btn-ui btn-ghost" onclick="tagMediaFiles()" title="Add the IMDB link to every file's caption">🏷️ Tag files</button>
+            </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3">
@@ -745,7 +769,7 @@
 
                 <div id="st-results" class="hidden">
                     <div class="overflow-x-auto rounded-2xl border border-hairline">
-                        <table class="w-full min-w-[760px] text-sm">
+                        <table class="st-table w-full sm:min-w-[760px] text-sm">
                             <thead class="bg-surface text-left">
                                 <tr class="text-text-secondary">
                                     <th class="px-4 py-3 font-semibold text-xs uppercase tracking-wider whitespace-nowrap">Bot / DC</th>
@@ -759,13 +783,13 @@
                             <tbody id="st-tbody" class="divide-y divide-hairline bg-surface"></tbody>
                         </table>
                     </div>
-                    <p id="st-summary" class="text-xs text-text-secondary mt-3 text-right"></p>
+                    <p id="st-summary" class="text-xs text-text-secondary mt-3 text-center sm:text-right"></p>
                 </div>
 
                 <div id="st-error" class="hidden mt-2 rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200"></div>
             </div>
 
-            <div class="flex flex-col sm:flex-row justify-end gap-3 px-4 sm:px-6 py-4 border-t border-hairline bg-surface">
+            <div class="st-actions flex flex-row justify-end gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-hairline bg-surface">
                 <button id="st-rerun-btn" onclick="rerunSpeedTest()" class="hidden btn-ui btn-primary">
                     🔄 Re-run
                 </button>
@@ -1022,6 +1046,17 @@
             console.error('Rescan search failed:', error);
             setRescanState('', false);
             showErrorMessage('Failed to search matches. Please try again.');
+        }
+    }
+
+    async function tagMediaFiles() {
+        try {
+            const response = await fetch(`/api/media/tag?tmdb_id=${tmdbId}&db_index=${dbIndex}&media_type=${mediaType}`, { method: 'POST' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) return showErrorMessage(data.detail || 'Failed to tag files.');
+            showSuccessMessage(data.message);
+        } catch (error) {
+            showErrorMessage('Failed to tag files. Please try again.');
         }
     }
 
@@ -1641,6 +1676,28 @@
         </div>`;
     }
 
+    function _resultRow(r, medal, maxSpeed) {
+        const isErr = !!r.error && !r.speed_mbps;
+        const ping = r.ping_ms !== null ? `<span class="${_pingClass(r.ping_ms)}">${r.ping_ms} ms</span>` : '<span class="text-text-secondary">—</span>';
+        const speed = r.speed_mbps !== null
+            ? `<span class="${_speedClass(r.speed_mbps)}">${r.speed_mbps.toFixed(2)} MB/s</span>
+               ${_miniBar(r.speed_mbps, maxSpeed, r.speed_mbps >= 20 ? 'bg-emerald-400' : r.speed_mbps >= 5 ? 'bg-amber-300' : 'bg-rose-300')}`
+            : '<span class="text-text-secondary">—</span>';
+        const badge = isErr
+            ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-200 border border-rose-500/20">Error</span>`
+            : `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">✓ OK</span>`;
+        const tr = document.createElement('tr');
+        tr.className = `transition-colors ${isErr ? 'opacity-70' : ''}`;
+        tr.innerHTML = `
+            <td class="px-4 py-3 font-medium text-white">${medal}Bot ${r.client_index + 1} <span class="text-xs text-text-secondary">(DC ${r.dc_id})</span></td>
+            <td data-label="Ping" class="px-4 py-3 text-text">${ping}</td>
+            <td data-label="Speed" class="px-4 py-3 text-text">${speed}${isErr ? `<div class="text-xs text-rose-300 mt-1 break-words">${r.error}</div>` : ''}</td>
+            <td data-label="Time" class="px-4 py-3 text-text-secondary text-sm">${r.time_taken_sec !== null ? `${r.time_taken_sec.toFixed(2)}s` : '—'}</td>
+            <td data-label="Downloaded" class="px-4 py-3 text-text-secondary text-xs">${r.bytes_downloaded ? `${(r.bytes_downloaded / 1048576).toFixed(2)} MB` : '—'}</td>
+            <td data-label="Status" class="px-4 py-3">${badge}</td>`;
+        return tr;
+    }
+
     async function _exec() {
         const params = new URLSearchParams({
             quality_id: _stQualityId,
@@ -1705,11 +1762,11 @@
                     tr.className = 'animate-pulse';
                     tr.innerHTML = `
                         <td class="px-4 py-3 font-medium text-text-secondary">🔄 Bot ${i + 1}</td>
-                        <td class="px-4 py-3"><span class="text-muted">testing…</span></td>
-                        <td class="px-4 py-3"><span class="text-muted">testing…</span></td>
-                        <td class="px-4 py-3 text-muted">—</td>
-                        <td class="px-4 py-3 text-muted">—</td>
-                        <td class="px-4 py-3"><span class="px-2 py-0.5 rounded-full text-xs bg-surface-2 text-text-secondary">Pending</span></td>`;
+                        <td data-label="Ping" class="px-4 py-3"><span class="text-muted">testing…</span></td>
+                        <td data-label="Speed" class="px-4 py-3"><span class="text-muted">testing…</span></td>
+                        <td data-label="Time" class="px-4 py-3 text-muted">—</td>
+                        <td data-label="Downloaded" class="px-4 py-3 text-muted">—</td>
+                        <td data-label="Status" class="px-4 py-3"><span class="px-2 py-0.5 rounded-full text-xs bg-surface-2 text-text-secondary">Pending</span></td>`;
                     tbody.appendChild(tr);
                     pendingRows[i] = tr;
                 }
@@ -1721,29 +1778,7 @@
                 const tr = pendingRows[r.client_index];
                 if (tr) {
                     maxSpeed = Math.max(maxSpeed, r.speed_mbps || 0, 1);
-                    const isErr = !!r.error && !r.speed_mbps;
-                    const medal = '';
-                    const dc = `Bot ${r.client_index + 1} <span class="text-xs text-text-secondary">(DC ${r.dc_id})</span>`;
-                    const ping = r.ping_ms !== null ? `<span class="${_pingClass(r.ping_ms)}">${r.ping_ms} ms</span>` : '<span class="text-text-secondary">—</span>';
-                    const speed = r.speed_mbps !== null
-                        ? `<span class="${_speedClass(r.speed_mbps)}">${r.speed_mbps.toFixed(2)} MB/s</span>
-                           ${_miniBar(r.speed_mbps, maxSpeed, r.speed_mbps >= 20 ? 'bg-emerald-400' : r.speed_mbps >= 5 ? 'bg-amber-300' : 'bg-rose-300')}`
-                        : '<span class="text-text-secondary">—</span>';
-                    const taken = r.time_taken_sec !== null ? `${r.time_taken_sec.toFixed(2)}s` : '—';
-                    const bytes = r.bytes_downloaded ? `${(r.bytes_downloaded / 1048576).toFixed(2)} MB` : '—';
-                    const badge = isErr
-                        ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-200 border border-rose-500/20">Error</span>`
-                        : `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">✓ OK</span>`;
-
-                    const newTr = document.createElement('tr');
-                    newTr.className = `transition-colors ${isErr ? 'opacity-70' : ''}`;
-                    newTr.innerHTML = `
-                        <td class="px-4 py-3 font-medium text-white">${medal}${dc}</td>
-                        <td class="px-4 py-3 text-text">${ping}</td>
-                        <td class="px-4 py-3 text-text">${speed}${isErr ? `<div class="text-xs text-rose-300 mt-1">${r.error}</div>` : ''}</td>
-                        <td class="px-4 py-3 text-text-secondary text-sm">${taken}</td>
-                        <td class="px-4 py-3 text-text-secondary text-xs">${bytes}</td>
-                        <td class="px-4 py-3">${badge}</td>`;
+                    const newTr = _resultRow(r, '', maxSpeed);
 
                     if (pendingRows[r.client_index]) {
                         pendingRows[r.client_index].replaceWith(newTr);
@@ -1768,29 +1803,7 @@
 
                 for (let i = 0; i < allResults.length; i++) {
                     const r = allResults[i];
-                    const isErr = !!r.error && !r.speed_mbps;
-                    const medal = i === 0 && !isErr ? '🥇 ' : '';
-                    const dc = `Bot ${r.client_index + 1} <span class="text-xs text-text-secondary">(DC ${r.dc_id})</span>`;
-                    const ping = r.ping_ms !== null ? `<span class="${_pingClass(r.ping_ms)}">${r.ping_ms} ms</span>` : '<span class="text-text-secondary">—</span>';
-                    const speed = r.speed_mbps !== null
-                        ? `<span class="${_speedClass(r.speed_mbps)}">${r.speed_mbps.toFixed(2)} MB/s</span>
-                           ${_miniBar(r.speed_mbps, maxSpeed, r.speed_mbps >= 20 ? 'bg-emerald-400' : r.speed_mbps >= 5 ? 'bg-amber-300' : 'bg-rose-300')}`
-                        : '<span class="text-text-secondary">—</span>';
-                    const taken = r.time_taken_sec !== null ? `${r.time_taken_sec.toFixed(2)}s` : '—';
-                    const bytes = r.bytes_downloaded ? `${(r.bytes_downloaded / 1048576).toFixed(2)} MB` : '—';
-                    const badge = isErr
-                        ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-200 border border-rose-500/20">Error</span>`
-                        : `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">✓ OK</span>`;
-
-                    const tr = document.createElement('tr');
-                    tr.className = `transition-colors ${isErr ? 'opacity-70' : ''}`;
-                    tr.innerHTML = `
-                        <td class="px-4 py-3 font-medium text-white">${medal}${dc}</td>
-                        <td class="px-4 py-3 text-text">${ping}</td>
-                        <td class="px-4 py-3 text-text">${speed}${isErr ? `<div class="text-xs text-rose-300 mt-1">${r.error}</div>` : ''}</td>
-                        <td class="px-4 py-3 text-text-secondary text-sm">${taken}</td>
-                        <td class="px-4 py-3 text-text-secondary text-xs">${bytes}</td>
-                        <td class="px-4 py-3">${badge}</td>`;
+                    const tr = _resultRow(r, i === 0 && r.speed_mbps ? '🥇 ' : '', maxSpeed);
                     tbody.appendChild(tr);
                 }
 
@@ -1962,7 +1975,7 @@
         div.className = 'flex flex-col sm:flex-row gap-2';
         div.setAttribute('data-sub-row', '');
         div.innerHTML = `<input class="field-input flex-1 sub-url" placeholder="Telegram message link" value="${url}">
-            <select class="field-input sm:w-44 sub-lang">${subtitleLangOptions()}</select>
+            <select class="field-input sub-lang">${subtitleLangOptions()}</select>
             <button type="button" onclick="this.closest('[data-sub-row]').remove()" class="btn-ui btn-ghost w-full sm:w-auto">Remove</button>`;
         document.getElementById('subtitle-rows').appendChild(div);
     }

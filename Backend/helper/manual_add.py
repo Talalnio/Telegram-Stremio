@@ -1,8 +1,10 @@
 import re
 from typing import Optional, Tuple
 
-from Backend.helper.metadata import caption_with_id, parse_media_name
-from Backend.helper.pyro import clean_filename, finalize_media_name, get_readable_file_size, is_media
+from Backend.helper.encrypt import decode_string
+from Backend.helper.metadata.common import ID_REFS
+from Backend.helper.metadata import caption_with_id, caption_with_links, has_raw_ref, parse_media_name
+from Backend.helper.pyro import clean_filename, finalize_media_name, get_readable_file_size, is_media, message_has_thumb
 from Backend.helper.split_files import parse_split_info, strip_part_suffix
 from Backend.logger import LOGGER
 from Backend.helper.task_manager import edit_message
@@ -84,7 +86,7 @@ async def resolve_telegram_message(client, url: str = None, chat_id=None, msg_id
         "episode": parsed.get("episode"),
         "width": getattr(media, "width", 0) or 0,
         "height": height,
-        "has_thumb": bool(getattr(media, "thumbs", None)),
+        "has_thumb": message_has_thumb(message),
         "upload_year": upload_year,
         "split_key": split_info[0] if split_info else None,
         "part_number": split_info[1] if split_info else None,
@@ -92,14 +94,28 @@ async def resolve_telegram_message(client, url: str = None, chat_id=None, msg_id
 
 
 
+#----- True when every IMDb/TMDB reference in the text points at this title
+def tagged_for(text: str, info: dict) -> bool:
+    imdb, tmdb = str(info.get("imdb_id") or ""), str(info.get("tmdb_id") or "")
+    path = "movie" if info.get("media_type", "movie") == "movie" else "tv"
+    refs = ID_REFS.findall(text or "")
+    return bool(refs) and all(
+        (imdb.startswith("tt") and re.search(rf"{imdb}(?!\d)", r, re.I))
+        or (tmdb.isdigit() and int(tmdb) > 0 and re.search(rf"/{path}/{tmdb}(?!\d)", r))
+        for r in refs
+    )
+
+
 async def stamp_caption_with_id(message, metadata_info: dict) -> bool:
     try:
+        if not has_raw_ref(message.caption) and tagged_for(caption_with_links(message), metadata_info):
+            return False
         media = message.video or message.document
         base = (getattr(message, "caption", None) or getattr(media, "file_name", None) or "")
         new_caption = caption_with_id(base, metadata_info)
         if not new_caption:
             return False
-        
+
         await edit_message(message.chat.id, message.id, new_caption)
         return True
     except Exception as e:
@@ -117,3 +133,24 @@ async def stamp_caption_by_ref(client, chat_id, msg_id, metadata_info: dict) -> 
     except Exception as e:
         LOGGER.warning(f"[Caption] Could not stamp id on message {msg_id}: {e}")
         return False
+
+
+#----- Re-tag every file of a title with its IMDB deeplink (wrong or raw links are replaced)
+async def retag_media(client, media_type: str, doc: dict) -> int:
+    info = {"imdb_id": doc.get("imdb_id"), "tmdb_id": doc.get("tmdb_id"), "media_type": media_type}
+    qualities = (doc.get("telegram") or []) if media_type == "movie" else [
+        q for s in doc.get("seasons") or [] for e in s.get("episodes") or [] for q in e.get("telegram") or []
+    ]
+    refs = []
+    for q in qualities:
+        if q.get("parts"):
+            refs += [(p["chat_id"], p["msg_id"]) for p in q["parts"]]
+        else:
+            try:
+                d = await decode_string(q["id"])
+                refs.append((d["chat_id"], d["msg_id"]))
+            except Exception:
+                continue
+    for chat_id, msg_id in refs:
+        await stamp_caption_by_ref(client, chat_id, msg_id, info)
+    return len(refs)

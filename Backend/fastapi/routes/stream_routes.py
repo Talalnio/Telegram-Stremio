@@ -15,9 +15,12 @@ from fastapi.responses import StreamingResponse
 from Backend import db
 from Backend.fastapi.security.credentials import require_auth
 from Backend.fastapi.security.tokens import verify_token
+from Backend.helper.bounded import BoundedDict
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
 from Backend.helper.encrypt import decode_string
+from Backend.helper.pyro import get_thumb_download_target
+from Backend.helper.settings_manager import SettingsManager
 from Backend.helper.utils import track_usage
 from Backend.helper.virtual_dl import resolve_virtual_parts, virtual_stream_generator
 from Backend.helper.zip_stream import resolve_zip_entry
@@ -36,7 +39,7 @@ router = APIRouter(tags=["Streaming"])
 _streamer_by_client: Dict = {}
 _rr_counter: int = 0
 
-_title_cache: Dict[str, tuple] = {}
+_title_cache = BoundedDict(2000)
 _TITLE_CACHE_TTL = 300
 
 
@@ -127,6 +130,27 @@ def _get_streamer(tg_client, index: int) -> ByteStreamer:
     return _streamer_by_client[tg_client]
 
 
+def warm_streamers() -> None:
+    for index, client in list(multi_clients.items()):
+        _get_streamer(client, index)
+
+
+def _prefetch_for(index: int) -> tuple[int, int]:
+    return (1, 1) if index == USERBOT_CLIENT_INDEX else get_parallel_prefetch(len(multi_clients) - 1)
+
+
+#----- Run fetch(streamer) on the Userbot when it is the default streamer, else (or on failure) on the bot pool
+async def _db_client(fetch):
+    if SettingsManager.current().default_streaming == "userbot" and (ub := _get_userbot_streamer()):
+        try:
+            return USERBOT_CLIENT_INDEX, ub, await fetch(ub)
+        except Exception as e:
+            LOGGER.warning(f"[USERBOT] Falling back to bots: {e}")
+    index = select_best_client(0)
+    streamer = _get_streamer(multi_clients[index], index)
+    return index, streamer, await fetch(streamer)
+
+
 #----- Resolve a stream title from the TTL cache, DB, or the decoded URL name
 async def _lookup_title(stream_id_hash: str, decoded_name: str):
     if not stream_id_hash:
@@ -172,7 +196,7 @@ def _build_stream_headers(mime_type, file_name, req_length, range_header, start,
     return headers, status
 
 
-_thumb_cache: Dict[str, tuple] = {}
+_thumb_cache = BoundedDict(200)
 _THUMB_CACHE_TTL = 3600
 
 
@@ -195,11 +219,11 @@ async def thumb_handler(id: str):
         client = multi_clients[select_best_client(0)]
         try:
             message = await client.get_messages(chat_id, msg_id)
-            media = getattr(message, "video", None) or getattr(message, "document", None)
-            thumbs = getattr(media, "thumbs", None) if media else None
-            if not thumbs:
+            target = get_thumb_download_target(message)
+            if not target:
                 raise HTTPException(status_code=404, detail="No thumbnail")
-            buf = await client.download_media(thumbs[-1].file_id, in_memory=True)
+            file_id = getattr(target, "file_id", None) or target
+            buf = await client.download_media(file_id, in_memory=True)
             data = buf.getvalue()
         except HTTPException:
             raise
@@ -306,10 +330,7 @@ async def stream_handler(request: Request, token: str, id: str, name: str, token
 
 #----- Stream a single Telegram file, with optional multi-client parallelism
 async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str, token_data: dict = None, stream_id_hash: str = None):
-    index = select_best_client(0)
-    tg_client = multi_clients[index]
-    streamer: ByteStreamer = _get_streamer(tg_client, index)
-    file_id = await streamer.get_file_properties(chat_id=chat_id, message_id=msg_id)
+    index, streamer, file_id = await _db_client(lambda s: s.get_file_properties(chat_id=chat_id, message_id=msg_id))
     file_size = file_id.file_size
     range_header = request.headers.get("Range", "")
     start, end = parse_range_header(range_header, file_size)
@@ -332,8 +353,7 @@ async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str
         "token": token,
     }
 
-    token_count = len(multi_clients) - 1
-    parallelism, prefetch_count = get_parallel_prefetch(token_count)
+    parallelism, prefetch_count = _prefetch_for(index)
     extra_clients_for_stream = []
     if parallelism > 1 and len(multi_clients) > 1:
         other_indices = sorted((i for i in multi_clients if i != index), key=lambda i: work_loads.get(i, 0))
@@ -380,11 +400,7 @@ async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str
 
 #----- Stream media reconstructed from multiple split parts
 async def virtual_media_streamer(request: Request, parts_payload: list, token: str, token_data: dict = None, stream_id_hash: str = None):
-    index = select_best_client(0)
-    tg_client = multi_clients[index]
-    streamer: ByteStreamer = _get_streamer(tg_client, index)
-
-    parts, file_size = await resolve_virtual_parts(parts_payload, streamer)
+    index, streamer, (parts, file_size) = await _db_client(lambda s: resolve_virtual_parts(parts_payload, s))
     if not parts or file_size <= 0:
         raise HTTPException(status_code=404, detail="Split media parts not found")
 
@@ -407,8 +423,7 @@ async def virtual_media_streamer(request: Request, parts_payload: list, token: s
         "split_parts": len(parts),
     }
 
-    token_count = len(multi_clients) - 1
-    parallelism, prefetch_count = get_parallel_prefetch(token_count)
+    parallelism, prefetch_count = _prefetch_for(index)
 
     asyncio.create_task(track_usage(stream_id, token, token_data))
 
@@ -631,10 +646,8 @@ async def global_zip_media_streamer(request: Request, parts_payload: list, token
 
 #----- ZIP split from the indexed library (streamed via the multi-bot pool)
 async def db_zip_media_streamer(request: Request, parts_payload: list, token: str, token_data: dict = None, stream_id_hash: str = None):
-    index = select_best_client(0)
-    tg_client = multi_clients[index]
-    streamer = _get_streamer(tg_client, index)
-    parallelism, prefetch_count = get_parallel_prefetch(len(multi_clients) - 1)
+    index, streamer, _ = await _db_client(lambda s: resolve_virtual_parts(parts_payload[:1], s))
+    parallelism, prefetch_count = _prefetch_for(index)
     return await _zip_media_streamer(
         request, parts_payload, token, token_data, stream_id_hash,
         streamer, index, True, parallelism, prefetch_count,

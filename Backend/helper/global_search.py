@@ -16,6 +16,7 @@ from pyrogram.errors import (
     RPCError,
 )
 
+from Backend.helper.bounded import BoundedDict
 from Backend.logger import LOGGER
 from Backend.helper.settings_manager import SettingsManager
 from Backend.helper.encrypt import encode_string
@@ -31,17 +32,16 @@ MAX_CONCURRENT_CHANNELS = 5
 MIN_TITLE_SCORE = 0.7
 RESULT_CACHE_SECONDS = 60
 
-_last_search_ts: Dict[str, float] = {}
+_last_search_ts = BoundedDict(500)
 _inflight_tasks: Dict[str, asyncio.Task] = {}
-_result_cache: Dict[str, tuple] = {} 
+_result_cache = BoundedDict(200)
 _search_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
 _channel_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHANNELS)
 _userbot_session_dead = False
-_chat_title_cache: Dict[int, str] = {}
+_chat_title_cache = BoundedDict(500)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _MULTIPART_RE = re.compile(r"(?:part|cd|disc|disk)[s._-]*\d+(?=\.\w+$)", re.IGNORECASE)
-_ALT_PART_RE = re.compile(r"^(.*?)[\s._-]*(?:part|cd|disc|disk|pt)[\s._-]*0*(\d{1,3})(?=\.\w+$|$)", re.IGNORECASE)
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".ts", ".m4v", ".mov", ".wmv", ".webm", ".flv")
 SPLIT_SCAN_WINDOW = 20
 _APOSTROPHE_RE = re.compile(r"['\u2018\u2019`\u00B4]")
@@ -195,12 +195,6 @@ def _split_part_info(filename: str) -> Optional[tuple]:
     info = parse_split_info(filename)
     if info:
         return info[0], info[1], strip_part_suffix(filename), False
-    m = _ALT_PART_RE.match(filename)
-    if m and m.group(1).strip(" ._-"):
-        ext_m = re.search(r"(\.\w+)$", filename)
-        display = m.group(1).strip(" ._-") + (ext_m.group(1) if ext_m else ".mkv")
-        base = _NORMALIZE_ALT_RE.sub(".", m.group(1)).strip(".").lower()
-        return base, int(m.group(2)), display, False
     return None
 
 
@@ -392,7 +386,7 @@ async def _search_channel(
                         if parsed is None:
                             continue
                         parts = await _gather_split_parts(client, chat_id, message.id, base)
-                        if len(parts) < 2:
+                        if len(parts) < 2 or sorted(parts) != list(range(1, len(parts) + 1)):
                             continue
                         split_groups[base] = {
                             "parts": parts,
@@ -659,7 +653,7 @@ async def _run_true_global_search(
                             if parsed is None:
                                 continue
                             parts = await _gather_split_parts(botmod.Userbot, chat_id, message.id, base)
-                            if len(parts) < 2:
+                            if len(parts) < 2 or sorted(parts) != list(range(1, len(parts) + 1)):
                                 continue
                             split_groups[group_key] = {
                                 "chat_id": chat_id,

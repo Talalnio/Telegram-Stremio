@@ -6,6 +6,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from Backend import db
 from Backend.config import Telegram
 from Backend.helper.settings_manager import SettingsManager
+from Backend.helper.utils import addon_links_text
 from Backend.logger import LOGGER
 
 def _currency_symbol(code):
@@ -28,16 +29,14 @@ async def send_start_message(client: Client, message: Message):
             user_name = (message.from_user.first_name or message.from_user.username or f"User {user_id}") if message.from_user else f"Chat {user_id}"
             try:
                 token_doc = await db.add_api_token(name=user_name, user_id=user_id)
-                addon_url = f"{base_url}/stremio/{token_doc.get('token')}/manifest.json"
+                links = addon_links_text(token_doc["token"])
             except Exception as e:
                 LOGGER.error(f"Error ensuring token for free user: {e}")
+                links = f"🧩 <b>Addon Manifest URL:</b>\n<code>{addon_url}</code>"
 
             await message.reply_text(
                 '🎉 <b>Welcome to the Telegram Stremio Media Server!</b>\n\n'
-                'Here is your personal Stremio Addon link:\n\n'
-                '🎬 <b>Stremio Addon — Install Link:</b>\n'
-                f'<code>{addon_url}</code>\n\n'
-                'Tap the link above → <b>Install</b> in Stremio to start watching!',
+                'Here are your personal links:\n\n' + links,
                 quote=True,
                 parse_mode=enums.ParseMode.HTML
             )
@@ -85,14 +84,13 @@ async def send_start_message(client: Client, message: Message):
         user_name = (user.get("first_name") or user.get("username")) if user else None
         token_doc = await db.ensure_api_token_for_user(user_id, user_name)
         if token_doc and token_doc.get("token"):
-            addon_url = f"{base_url}/stremio/{token_doc['token']}/manifest.json"
+            links = addon_links_text(token_doc["token"])
+        else:
+            links = f"🧩 <b>Addon Manifest URL:</b>\n<code>{addon_url}</code>"
 
         await message.reply_text(
             '🎉 <b>Welcome back to the Telegram Stremio Subscription Manager!</b>\n\n'
-            'Your subscription is active. Here is your personal addon link:\n\n'
-            '🎬 <b>Stremio Addon — Install Link:</b>\n'
-            f'<code>{addon_url}</code>\n\n'
-            'Tap the link above → <b>Install</b> in Stremio to start watching!',
+            'Your subscription is active. Here are your personal links:\n\n' + links,
             quote=True,
             parse_mode=enums.ParseMode.HTML
         )

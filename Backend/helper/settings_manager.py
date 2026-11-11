@@ -28,6 +28,9 @@ _DEFAULTS: Dict[str, Any] = {
     "payment_instructions": "",
     "payment_qr_url": "",
     "http_proxy_url": "",
+    "cf_stream_url": "",
+    "cf_stream_secret": "",
+    "cf_stream_mode": "off",
     "show_proxy_and_non_proxy_both": False,
     "mediaflow_proxy": False,
     "mediaflow_password": "",
@@ -36,6 +39,7 @@ _DEFAULTS: Dict[str, Any] = {
     "multi_tokens": [],
     "extra_databases": [],
     "global_search": False,
+    "default_streaming": "bots",
     "global_search_channels": [],
     "anime_channels": [],
     "manual_channels": [],
@@ -48,6 +52,11 @@ _DEFAULTS: Dict[str, Any] = {
     "better_poster": "",
     "rpdb_enabled": False,
     "rpdb_api_key": "",
+    "spatial_poster_enabled": False,
+    "spatial_poster": "",
+    "stream_formatter": "default",
+    "formatter_name": "",
+    "formatter_description": "",
     "fanart_enabled": False,
     "fanart_api_key": "",
     "fanart_shuffle": False,
@@ -126,6 +135,10 @@ class Settings:
         return bool(self._d.get("global_search", False))
 
     @property
+    def default_streaming(self) -> str:
+        return "userbot" if self._d.get("default_streaming") == "userbot" else "bots"
+
+    @property
     def global_search_channels(self):
         return list(self._d.get("global_search_channels") or [])
 
@@ -198,6 +211,20 @@ class Settings:
         return str(self._d.get("http_proxy_url") or "")
 
     @property
+    def cf_stream_url(self) -> str:
+        return str(self._d.get("cf_stream_url") or "").rstrip("/")
+
+    @property
+    def cf_stream_secret(self) -> str:
+        return str(self._d.get("cf_stream_secret") or "")
+
+    #----- "off", "cloudflare" (CF links only) or "both" (CF + direct links)
+    @property
+    def cf_stream_mode(self) -> str:
+        mode = str(self._d.get("cf_stream_mode") or "off")
+        return mode if mode in ("off", "cloudflare", "both") else "off"
+
+    @property
     def mediaflow_password(self) -> str:
         return str(self._d.get("mediaflow_password") or "")
 
@@ -232,6 +259,26 @@ class Settings:
     @property
     def rpdb_api_key(self) -> str:
         return str(self._d.get("rpdb_api_key") or "").strip()
+
+    @property
+    def stream_formatter(self) -> str:
+        return str(self._d.get("stream_formatter") or "default")
+
+    @property
+    def formatter_name(self) -> str:
+        return str(self._d.get("formatter_name") or "")
+
+    @property
+    def formatter_description(self) -> str:
+        return str(self._d.get("formatter_description") or "")
+
+    @property
+    def spatial_poster_enabled(self) -> bool:
+        return bool(self._d.get("spatial_poster_enabled", False))
+
+    @property
+    def spatial_poster(self) -> str:
+        return str(self._d.get("spatial_poster") or "").strip()
 
     @property
     def fanart_enabled(self) -> bool:
@@ -449,6 +496,16 @@ class SettingsManager:
         proxy_keys = {"http_proxy_url", "show_proxy_and_non_proxy_both", "mediaflow_proxy", "mediaflow_password"}
         if any(old.get(k) != new.get(k) for k in proxy_keys):
             results["proxy"] = "updated — applies to next outbound request"
+
+        #----- Cloudflare streaming settings changed (read live per request)
+        cf_keys = {"cf_stream_url", "cf_stream_secret", "cf_stream_mode"}
+        if any(old.get(k) != new.get(k) for k in cf_keys):
+            results["cloudflare"] = "updated — new stream links use it right away"
+
+        #----- Bot tokens or Cloudflare settings changed: have the Worker reload them now
+        if old_tokens != new_tokens or any(old.get(k) != new.get(k) for k in cf_keys):
+            from Backend.helper.cf_stream import sync_worker_soon
+            sync_worker_soon()
 
         #----- Subscription enabled/disabled: start or stop the checker task
         if old.get("subscription") != new.get("subscription"):

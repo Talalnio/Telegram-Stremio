@@ -35,6 +35,7 @@ def build_userbot(session_string: str):
         api_id=Telegram.API_ID,
         api_hash=Telegram.API_HASH,
         session_string=session_string,
+        device_model='Telegram Stremio',
         sleep_threshold=20,
         workers=6,
         max_concurrent_transmissions=10,

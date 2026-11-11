@@ -17,6 +17,7 @@ from Backend import db
 from Backend.helper.exceptions import FileNotFound
 from Backend.helper.pyro import get_file_ids
 from Backend.logger import LOGGER
+from Backend.helper.bounded import BoundedDict
 from Backend.pyrofork.bot import client_avg_mbps, client_dc_map, client_failures, multi_clients, work_loads
 
 ACTIVE_STREAMS: Dict[str, Dict] = {}
@@ -46,7 +47,7 @@ async def _cleanup_stale_streams():
                         entry["end_ts"] = now
                         RECENT_STREAMS.appendleft(entry)
                         idx = entry.get("client_index")
-                        if idx is not None and idx in work_loads:
+                        if entry.pop("load_held", False) and idx in work_loads:
                             work_loads[idx] = max(0, work_loads[idx] - 1)
                 except Exception:
                     pass
@@ -70,7 +71,7 @@ class ByteStreamer:
     def __init__(self, client: Client, client_index: int = -1):
         self.client = client
         self.client_index = client_index
-        self._file_id_cache: Dict[Tuple[int, int], FileId] = {}
+        self._file_id_cache = BoundedDict(2000)
         self._session_lock = asyncio.Lock()
         if client_index >= 0:
             ByteStreamer._instances[client_index] = self
@@ -83,17 +84,17 @@ class ByteStreamer:
         test_mode = await self.client.storage.test_mode()
         current_dc = await self.client.storage.dc_id()
         for dc in common_dcs:
-            if dc in self.client.media_sessions or dc == current_dc:
+            if dc in self.client.media_sessions:
                 continue
             try:
-                auth_key = await Auth(self.client, dc, test_mode).create()
+                auth_key = await self.client.storage.auth_key() if dc == current_dc else await Auth(self.client, dc, test_mode).create()
                 session = Session(self.client, dc, auth_key, test_mode, is_media=True)
                 session.no_updates = True
                 session.timeout = 30
                 session.sleep_threshold = 60
                 await session.start()
-                imported = False
-                for _ in range(6):
+                imported = dc == current_dc
+                for _ in range(0 if imported else 6):
                     try:
                         exported = await self.client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc))
                         await session.send(raw.functions.auth.ImportAuthorization(id=exported.id,bytes=exported.bytes,))
@@ -105,7 +106,7 @@ class ByteStreamer:
                         await asyncio.sleep(1)
                     except Exception:
                         break
-                if imported:
+                if imported and dc not in self.client.media_sessions:
                     self.client.media_sessions[dc] = session
                 else:
                     await session.stop()
@@ -163,6 +164,7 @@ class ByteStreamer:
             "part_count": part_count,
             "prefetch": prefetch,
             "meta": meta or {},
+            "load_held": True,
         }
 
         ACTIVE_STREAMS[stream_id] = registry_entry
@@ -206,12 +208,10 @@ class ByteStreamer:
                     LOGGER.warning("Skipping extra client %s (session setup failed): %s", ec_idx, e)
 
         async def fetch_chunk_with_retries(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
-            slot = seq_idx % len(session_pool)
-            c_idx, c_session, c_loc_box, c_refresh = session_pool[slot]
-
             tries = 0
             flood_tries = 0
             while tries < 3 and flood_tries < 5 and not stop_event.is_set():
+                c_idx, c_session, c_loc_box, c_refresh = session_pool[(seq_idx + tries) % len(session_pool)]
                 try:
                     r = await asyncio.wait_for(
                         c_session.send(
@@ -485,10 +485,8 @@ class ByteStreamer:
 
                     asyncio.create_task(delayed_pop())
                 finally:
-                    try:
-                        work_loads[client_index] -= 1
-                    except Exception:
-                        pass
+                    if stream_entry.pop("load_held", False):
+                        work_loads[client_index] = max(0, work_loads.get(client_index, 0) - 1)
 
                 stop_event.set()
 
@@ -620,7 +618,6 @@ async def _speed_test_single_client(
                     chunk = getattr(r, "bytes", None)
                     if not chunk:
                         eof_reached = True
-                        queue.task_done()
                         continue
                     bytes_got = len(chunk)
                     total_bytes += bytes_got

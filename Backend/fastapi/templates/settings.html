@@ -460,6 +460,25 @@
         </div>
 
         <label class="toggle-wrap" style="margin-bottom:0.75rem">
+            <input type="checkbox" class="toggle-input" id="spatial_poster_enabled"
+                {% if settings.spatial_poster_enabled %}checked{% endif %}
+                onchange="togglePosterProvider('spatial')">
+            <span class="toggle-track"></span>
+            <span class="toggle-label">
+                <strong>SpatialPosters</strong>
+                <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                    Your SpatialPosters instance. Paste its Stremio poster URL pattern.
+                </span>
+            </span>
+        </label>
+        <div id="spatial-poster-wrap" style="margin-bottom:1.25rem;{% if not settings.spatial_poster_enabled %}display:none{% endif %}">
+            <label class="s-label" for="spatial_poster">SpatialPosters URL</label>
+            <input type="text" id="spatial_poster" class="s-input"
+                value="{{ settings.spatial_poster }}" autocomplete="off" spellcheck="false"
+                placeholder="https://your-instance/api/poster/{type}/{imdb_id}?config=...">
+        </div>
+
+        <label class="toggle-wrap" style="margin-bottom:0.75rem">
             <input type="checkbox" class="toggle-input" id="fanart_enabled"
                 {% if settings.fanart_enabled %}checked{% endif %}
                 onchange="togglePosterProvider('fanart')">
@@ -507,6 +526,61 @@
                 <span style="color:var(--text-sec);font-size:0.8rem;display:block;margin-top:0.35rem">
                     How often the artwork changes. Use 0 for a fresh random pick on every load.
                 </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Stream Formatter ────────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-solid fa-wand-magic-sparkles"></i> Stream Formatter</h2>
+        <p style="font-size:0.83rem;color:var(--text-sec);margin-bottom:1rem">
+            How each stream's name and description look in Stremio. Uses the AIOStreams template syntax, so
+            Prism, Tamtaro and any other community formatter can be pasted into Custom as-is.
+            Empty fields are removed automatically.
+        </p>
+        <label class="s-label" for="stream_formatter">Formatter</label>
+        <select id="stream_formatter" class="s-input" onchange="toggleFormatter()">
+            {% set fmt = settings.stream_formatter or 'default' %}
+            <option value="default" {% if fmt == 'default' %}selected{% endif %}>Default (built-in)</option>
+            <option value="prism" {% if fmt == 'prism' %}selected{% endif %}>Prism</option>
+            <option value="tamtaro" {% if fmt == 'tamtaro' %}selected{% endif %}>Tamtaro</option>
+            <option value="gdrive" {% if fmt == 'gdrive' %}selected{% endif %}>GDrive</option>
+            <option value="lightgdrive" {% if fmt == 'lightgdrive' %}selected{% endif %}>Light GDrive</option>
+            <option value="minimalisticgdrive" {% if fmt == 'minimalisticgdrive' %}selected{% endif %}>Minimalistic GDrive</option>
+            <option value="torrentio" {% if fmt == 'torrentio' %}selected{% endif %}>Torrentio</option>
+            <option value="torbox" {% if fmt == 'torbox' %}selected{% endif %}>TorBox</option>
+            <option value="custom" {% if fmt == 'custom' %}selected{% endif %}>Custom</option>
+        </select>
+
+        <div id="formatter-custom-wrap" style="margin-top:1rem;{% if fmt != 'custom' %}display:none{% endif %}">
+            <div class="flex items-center justify-between gap-2" style="margin-bottom:0.4rem">
+                <label class="s-label" for="formatter_name" style="margin:0">Name template</label>
+                <select id="formatter_copy" class="s-input" style="width:auto;padding:0.3rem 0.6rem;font-size:0.78rem" onchange="copyPreset(this)">
+                    <option value="">Start from preset…</option>
+                    {% for key in formatter_presets %}<option value="{{ key }}">{{ key }}</option>{% endfor %}
+                </select>
+            </div>
+            <textarea id="formatter_name" class="s-input" rows="3" spellcheck="false"
+                style="font-family:monospace;font-size:0.78rem" oninput="schedulePreview()">{{ settings.formatter_name }}</textarea>
+            <label class="s-label" for="formatter_description" style="margin-top:0.85rem">Description template</label>
+            <textarea id="formatter_description" class="s-input" rows="8" spellcheck="false"
+                style="font-family:monospace;font-size:0.78rem" oninput="schedulePreview()">{{ settings.formatter_description }}</textarea>
+            <p style="font-size:0.75rem;color:var(--text-sec);margin-top:0.4rem">
+                Fields: <code>{stream.resolution}</code> <code>{stream.quality}</code> <code>{stream.encode}</code>
+                <code>{stream.visualTags}</code> <code>{stream.audioTags}</code> <code>{stream.audioChannels}</code>
+                <code>{stream.languages}</code> <code>{stream.languageEmojis}</code> <code>{stream.size}</code>
+                <code>{stream.releaseGroup}</code> <code>{stream.seasonEpisode}</code> <code>{stream.indexer}</code>
+                <code>{addon.name}</code> … Wrap optional parts in <code>{?…?}</code> or <code>::exists["…"||""]</code>.
+            </p>
+        </div>
+
+        <div id="formatter-preview-wrap" style="margin-top:1rem;{% if fmt == 'default' %}display:none{% endif %}">
+            <label class="s-label" for="formatter_sample">Preview filename</label>
+            <input type="text" id="formatter_sample" class="s-input" spellcheck="false" oninput="schedulePreview()"
+                value="Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.DV.HDR10.HEVC.TrueHD.Atmos.7.1.ITA.ENG-GROUP.mkv">
+            <div style="display:flex;gap:0.9rem;margin-top:0.75rem;padding:0.9rem;border-radius:0.8rem;border:1px solid var(--border);background:#0f0f14;color:#e5e5e5;font-size:0.8rem">
+                <div id="formatter-preview-name" style="white-space:pre-wrap;font-weight:700;min-width:6.5rem;max-width:40%"></div>
+                <div id="formatter-preview-desc" style="white-space:pre-wrap;min-width:0;overflow-wrap:anywhere"></div>
             </div>
         </div>
     </div>
@@ -672,6 +746,22 @@
         </div>
         <p id="sess-msg" style="font-size:0.8rem;margin-top:0.7rem;display:none"></p>
     </div>
+
+    {% if userbot_configured %}
+    <hr class="divider">
+    <label class="toggle-wrap">
+        <input type="checkbox" class="toggle-input" id="default_streaming"
+            {% if settings.default_streaming == 'userbot' %}checked{% endif %}>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">
+            <strong>Default Streaming: Userbot</strong>
+            <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                Off streams library files by Bots (default). On streams them by the Userbot, falling back to Bots on error.
+                Global Search files always use the Userbot.
+            </span>
+        </span>
+    </label>
+    {% endif %}
 </div>
 
 <style>
@@ -1029,6 +1119,43 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
         </label>
     </div>
 
+
+    <!-- ── Cloudflare Streaming ────────────────────────────────────────── -->
+    <div class="settings-card">
+        <h2><i class="fa-brands fa-cloudflare"></i> Cloudflare Streaming</h2>
+        <p style="font-size:0.8rem;color:var(--text-sec);margin:-0.25rem 0 1rem">
+            Stream video from a Cloudflare streaming Worker instead of this server. Catalogs, tokens and
+            limits stay here; the Worker reports each token's usage back. Enter the URL and secret you were given.
+        </p>
+        <a href="https://proxy.weebzonex.workers.dev" target="_blank" rel="noopener" class="add-btn" style="display:inline-flex;align-items:center;gap:.5rem;margin-bottom:1rem;text-decoration:none">
+            <i class="fa-solid fa-bolt"></i> Get Cloudflare streaming
+        </a>
+        <p style="font-size:0.75rem;color:var(--text-sec);margin:-0.5rem 0 1rem">
+            Recommended on free hosts (Koyeb, Render, orkestr): video then streams fast from Cloudflare instead of a slow, sleeping free server.
+            After buying, you get the Worker URL and secret on Telegram.
+        </p>
+        <div style="margin-bottom:1rem">
+            <label class="s-label" for="cf_stream_url">Worker URL</label>
+            <input type="url" id="cf_stream_url" class="s-input"
+                value="{{ settings.cf_stream_url }}"
+                placeholder="https://telestream.your-name.workers.dev">
+        </div>
+        <div style="margin-bottom:1rem">
+            <label class="s-label" for="cf_stream_secret">Shared Secret</label>
+            <input type="password" id="cf_stream_secret" class="s-input"
+                value="{{ settings.cf_stream_secret }}"
+                placeholder="The secret that came with your Worker URL"
+                autocomplete="off" spellcheck="false">
+        </div>
+        <div>
+            <label class="s-label" for="cf_stream_mode">Stremio Links</label>
+            <select id="cf_stream_mode" class="s-input">
+                <option value="off" {% if settings.cf_stream_mode == "off" %}selected{% endif %}>Off — stream from this server</option>
+                <option value="cloudflare" {% if settings.cf_stream_mode == "cloudflare" %}selected{% endif %}>Cloudflare only</option>
+                <option value="both" {% if settings.cf_stream_mode == "both" %}selected{% endif %}>Both — Cloudflare and direct</option>
+            </select>
+        </div>
+    </div>
     
     <!-- ── WebDAV ──────────────────────────────────────────────────────── -->
     <div class="settings-card">
@@ -1289,6 +1416,7 @@ function togglePosterProvider(which) {
     const els = {
         better: document.getElementById('better_poster_enabled'),
         rpdb: document.getElementById('rpdb_enabled'),
+        spatial: document.getElementById('spatial_poster_enabled'),
         fanart: document.getElementById('fanart_enabled'),
     };
     if (which && els[which] && els[which].checked) {
@@ -1296,8 +1424,63 @@ function togglePosterProvider(which) {
     }
     document.getElementById('better-poster-wrap').style.display = els.better.checked ? '' : 'none';
     document.getElementById('rpdb-wrap').style.display = els.rpdb.checked ? '' : 'none';
+    document.getElementById('spatial-poster-wrap').style.display = els.spatial.checked ? '' : 'none';
     document.getElementById('fanart-wrap').style.display = els.fanart.checked ? '' : 'none';
 }
+
+const FORMATTER_PRESETS = {{ formatter_presets|tojson }};
+let previewTimer = null;
+
+function toggleFormatter() {
+    const v = document.getElementById('stream_formatter').value;
+    document.getElementById('formatter-custom-wrap').style.display = v === 'custom' ? '' : 'none';
+    document.getElementById('formatter-preview-wrap').style.display = v === 'default' ? 'none' : '';
+    const name = document.getElementById('formatter_name');
+    if (v === 'custom' && !name.value.trim()) {
+        name.value = FORMATTER_PRESETS.gdrive.name;
+        document.getElementById('formatter_description').value = FORMATTER_PRESETS.gdrive.description;
+    }
+    schedulePreview();
+}
+
+function copyPreset(sel) {
+    const p = FORMATTER_PRESETS[sel.value];
+    if (p && confirm('Replace the custom templates with the ' + sel.value + ' preset?')) {
+        document.getElementById('formatter_name').value = p.name;
+        document.getElementById('formatter_description').value = p.description;
+        schedulePreview();
+    }
+    sel.value = '';
+}
+
+function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 300);
+}
+
+async function renderPreview() {
+    const preset = document.getElementById('stream_formatter').value;
+    if (preset === 'default') return;
+    try {
+        const res = await fetch('/api/admin/settings/formatter-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                preset,
+                name: document.getElementById('formatter_name').value,
+                description: document.getElementById('formatter_description').value,
+                filename: document.getElementById('formatter_sample').value,
+            }),
+        });
+        const data = await res.json();
+        document.getElementById('formatter-preview-name').textContent = data.name || '';
+        document.getElementById('formatter-preview-desc').textContent = data.description || '';
+    } catch (e) {
+        document.getElementById('formatter-preview-desc').textContent = 'Preview failed.';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', schedulePreview);
 
 function toggleFanartShuffle() {
     const on = document.getElementById('fanart_shuffle').checked;
@@ -1515,6 +1698,11 @@ async function saveSettings() {
         better_poster:                 document.getElementById('better_poster').value.trim(),
         rpdb_enabled:                  document.getElementById('rpdb_enabled').checked,
         rpdb_api_key:                  document.getElementById('rpdb_api_key').value.trim(),
+        spatial_poster_enabled:        document.getElementById('spatial_poster_enabled').checked,
+        spatial_poster:                document.getElementById('spatial_poster').value.trim(),
+        stream_formatter:              document.getElementById('stream_formatter').value,
+        formatter_name:                document.getElementById('formatter_name').value,
+        formatter_description:         document.getElementById('formatter_description').value,
         fanart_enabled:                document.getElementById('fanart_enabled').checked,
         fanart_api_key:                document.getElementById('fanart_api_key').value.trim(),
         fanart_shuffle:                document.getElementById('fanart_shuffle').checked,
@@ -1535,6 +1723,9 @@ async function saveSettings() {
         show_proxy_and_non_proxy_both: document.getElementById('show_proxy_and_non_proxy_both').checked,
         mediaflow_proxy:               document.getElementById('mediaflow_proxy').checked,
         mediaflow_password:            document.getElementById('mediaflow_password').value,
+        cf_stream_url:                 document.getElementById('cf_stream_url').value.trim(),
+        cf_stream_secret:              document.getElementById('cf_stream_secret').value.trim(),
+        cf_stream_mode:                document.getElementById('cf_stream_mode').value,
         webdav_user:                   document.getElementById('webdav_user').value.trim(),
         webdav_password:               document.getElementById('webdav_password').value,
         multi_tokens:                  collectList('multi_tokens'),
@@ -1547,6 +1738,8 @@ async function saveSettings() {
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
     };
+    const dsEl = document.getElementById('default_streaming');
+    if (dsEl) payload.default_streaming = dsEl.checked ? 'userbot' : 'bots';
 
     try {
         const res  = await fetch('/api/admin/settings', {
@@ -1650,6 +1843,8 @@ function renderSettings(s) {
     document.getElementById('subscription').checked = !!s.subscription;
     document.getElementById('show_proxy_and_non_proxy_both').checked = !!s.show_proxy_and_non_proxy_both;
     document.getElementById('global_search').checked = !!s.global_search;
+    const dsEl = document.getElementById('default_streaming');
+    if (dsEl) dsEl.checked = s.default_streaming === 'userbot';
     document.getElementById('announce_new_content').checked = !!s.announce_new_content;
     document.getElementById('delete_on_metadata_fail').checked = !!s.delete_on_metadata_fail;
     toggleSubFields();
@@ -1666,6 +1861,12 @@ function renderSettings(s) {
     document.getElementById('better_poster').value = s.better_poster || '';
     document.getElementById('rpdb_enabled').checked = !!s.rpdb_enabled;
     document.getElementById('rpdb_api_key').value = s.rpdb_api_key || '';
+    document.getElementById('spatial_poster_enabled').checked = !!s.spatial_poster_enabled;
+    document.getElementById('spatial_poster').value = s.spatial_poster || '';
+    document.getElementById('stream_formatter').value = s.stream_formatter || 'default';
+    document.getElementById('formatter_name').value = s.formatter_name || '';
+    document.getElementById('formatter_description').value = s.formatter_description || '';
+    toggleFormatter();
     document.getElementById('fanart_enabled').checked = !!s.fanart_enabled;
     document.getElementById('fanart_api_key').value = s.fanart_api_key || '';
     document.getElementById('fanart_shuffle').checked = !!s.fanart_shuffle;
@@ -1681,6 +1882,9 @@ function renderSettings(s) {
     document.getElementById('http_proxy_url').value = s.http_proxy_url || '';
     document.getElementById('mediaflow_proxy').checked = !!s.mediaflow_proxy;
     document.getElementById('mediaflow_password').value = s.mediaflow_password || '';
+    document.getElementById('cf_stream_url').value = s.cf_stream_url || '';
+    document.getElementById('cf_stream_secret').value = s.cf_stream_secret || '';
+    document.getElementById('cf_stream_mode').value = s.cf_stream_mode || 'off';
     const wu = document.getElementById('webdav_user');
     if (wu) wu.value = s.webdav_user || '';
     const wp = document.getElementById('webdav_password');

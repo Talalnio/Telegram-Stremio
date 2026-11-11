@@ -90,6 +90,12 @@ async def _activate(session_string: str) -> None:
         LOGGER.warning(f"[SESSION] Live Userbot activation failed (restart to apply): {e}")
 
 
+#----- The Cloudflare Worker streams global results with this session; tell it to reload
+def _sync_worker() -> None:
+    from Backend.helper.cf_stream import sync_worker_soon
+    sync_worker_soon()
+
+
 async def _deactivate() -> None:
     try:
         if botmod.Userbot is not None:
@@ -169,6 +175,7 @@ async def _finalize(login_id: str) -> dict:
         pass
     await _store_session(session_string, profile)
     await _activate(session_string)
+    _sync_worker()
     return {"status": "ok", "profile": profile}
 
 
@@ -191,6 +198,7 @@ async def get_session_status() -> dict:
 async def disconnect_session() -> dict:
     await db.dbs["tracking"]["state"].update_one({"_id": "user_session"}, {"$set": {"active": False}})
     await _deactivate()
+    _sync_worker()
     return {"ok": True}
 
 
@@ -206,10 +214,12 @@ async def reconnect_session() -> dict:
         raise ValueError("No stored session to reconnect.")
     await db.dbs["tracking"]["state"].update_one({"_id": "user_session"}, {"$set": {"active": True}})
     await _activate(session_string)
+    _sync_worker()
     return {"ok": True}
 
 
 async def remove_session() -> dict:
     await _deactivate()
     await db.dbs["tracking"]["state"].delete_one({"_id": "user_session"})
+    _sync_worker()
     return {"ok": True}

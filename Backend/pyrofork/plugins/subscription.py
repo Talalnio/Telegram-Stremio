@@ -12,6 +12,7 @@ from pyrogram.types import (
 from Backend import db
 from Backend.config import Telegram
 from Backend.helper.settings_manager import SettingsManager
+from Backend.helper.utils import addon_links_text
 from Backend.logger import LOGGER
 
 def _currency_symbol(code):
@@ -238,9 +239,9 @@ async def admin_review(client: Client, callback_query: CallbackQuery):
             user_name = (user_obj.get("first_name") or user_obj.get("username") or str(target_user_id)) if user_obj else str(target_user_id)
             token_doc = await db.add_api_token(name=user_name, user_id=target_user_id)
             await db.align_token_with_subscription(target_user_id)
-            addon_url = f"{SettingsManager.current().base_url}/stremio/{token_doc.get('token')}/manifest.json"
+            links = addon_links_text(token_doc["token"])
         except Exception:
-            addon_url = None
+            links = None
 
         try:
             invite_link = await client.create_chat_invite_link(
@@ -258,12 +259,8 @@ async def admin_review(client: Client, callback_query: CallbackQuery):
             f"Your subscription is now active until <b>{expiry_str}</b>."
             f"{invite_text}"
         )
-        if addon_url:
-            success_text += (
-                f"\n\n🎬 <b>Stremio Addon — Install Link:</b>\n"
-                f"<code>{addon_url}</code>\n\n"
-                f"Tap the link above → <b>Install</b> in Stremio to start watching!"
-            )
+        if links:
+            success_text += "\n\n" + links
         await client.send_message(target_user_id, success_text)
 
         mention, username_str = await _resolve_target_info(client, target_user_id)
